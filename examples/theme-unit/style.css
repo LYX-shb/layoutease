@@ -1,0 +1,8 @@
+:root { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; color: #20242b; background: #eef2f7; }
+body { min-height: 100vh; display: grid; place-items: center; margin: 0; }
+.unit-card { width: min(560px, calc(100% - 48px)); padding: 48px; background: #fff; border-radius: 16px; box-shadow: 0 14px 40px rgb(39 58 82 / 12%); }
+.unit-label { margin: 0 0 12px; color: #3867d6; font-size: 13px; font-weight: 700; }
+h1 { margin: 0; font-size: 38px; }
+.unit-card > p:not(.unit-label):not(.feedback) { color: #66707d; line-height: 1.7; }
+button { padding: 11px 20px; color: #fff; background: #3867d6; border: 0; border-radius: 8px; cursor: pointer; }
+.feedback { min-height: 24px; color: #3867d6; }
