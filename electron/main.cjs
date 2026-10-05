@@ -24,6 +24,7 @@ const previewBridgeScript = String.raw`<script>
   let drag = null;
   let autoId = 0;
   let editingEnabled = true;
+  let targetPicking = false;
 
   function editableElement(target) {
     if (!(target instanceof Element)) return null;
@@ -108,6 +109,7 @@ const previewBridgeScript = String.raw`<script>
     selected = element;
     const rect = element.getBoundingClientRect();
     const styles = getComputedStyle(element);
+    const nestedImage = element.tagName === 'IMG' ? null : element.querySelector('img');
     send('selected', {
       id: element.dataset.editorId,
       auto: element.dataset.editorAuto === 'true',
@@ -119,6 +121,11 @@ const previewBridgeScript = String.raw`<script>
       className: element.getAttribute('class') || '',
       outerHTML: element.outerHTML.slice(0, 2000),
       src: element instanceof HTMLImageElement ? element.getAttribute('src') || '' : '',
+      nestedImage: nestedImage ? {
+        selector: cssPath(nestedImage),
+        src: nestedImage.getAttribute('src') || '',
+        index: Array.from(element.querySelectorAll('img')).indexOf(nestedImage),
+      } : null,
       rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) },
       styles: {
         fontSize: styles.fontSize,
@@ -139,6 +146,23 @@ const previewBridgeScript = String.raw`<script>
     if (event.button !== 0) return;
     const element = editableElement(event.target);
     if (!element) return;
+    if (targetPicking) {
+      targetPicking = false;
+      const previousOutline = element.style.outline || '';
+      const previousOutlineOffset = element.style.outlineOffset || '';
+      element.style.outline = '2px dashed #12a66a';
+      element.style.outlineOffset = '2px';
+      setTimeout(() => {
+        element.style.outline = previousOutline;
+        element.style.outlineOffset = previousOutlineOffset;
+      }, 900);
+      send('target-selected', {
+        selector: cssPath(element),
+        tag: element.tagName.toLowerCase(),
+      });
+      event.preventDefault();
+      return;
+    }
     select(element);
     const inlineTransform = element.style.transform || '';
     const computedTransform = getComputedStyle(element).transform;
@@ -190,7 +214,16 @@ const previewBridgeScript = String.raw`<script>
     if (!event.data || event.data.source !== editorSource) return;
     if (event.data.type === 'set-mode') {
       editingEnabled = event.data.mode === 'edit';
+      targetPicking = false;
       if (!editingEnabled && selected) selected.style.outline = selected.dataset.editorPreviousOutline || '';
+      if (editingEnabled && selected) {
+        selected.style.outline = '2px solid #3867d6';
+        selected.style.outlineOffset = '2px';
+      }
+      return;
+    }
+    if (event.data.type === 'set-interaction-target') {
+      targetPicking = Boolean(event.data.enabled);
       return;
     }
     const element = document.querySelector('[data-editor-id="' + CSS.escape(event.data.id) + '"]');
@@ -205,6 +238,14 @@ const previewBridgeScript = String.raw`<script>
       select(element);
       return;
     }
+    if (event.data.type === 'apply-nested-attribute') {
+      const nested = typeof event.data.selector === 'string' ? document.querySelector(event.data.selector) : null;
+      if (nested && element.contains(nested) && ['src', 'poster'].includes(event.data.name)) {
+        nested.setAttribute(event.data.name, event.data.value || '');
+        select(element);
+      }
+      return;
+    }
     if (event.data.type !== 'apply-style') return;
     const allowedProperties = ['fontSize', 'color', 'width', 'height', 'margin', 'padding', 'backgroundImage', 'transform'];
     if (!allowedProperties.includes(event.data.property)) return;
@@ -214,6 +255,12 @@ const previewBridgeScript = String.raw`<script>
   window.addEventListener('load', reportReady);
   window.addEventListener('pageshow', reportReady);
   reportReady();
+
+  document.addEventListener('click', (event) => {
+    if (!editingEnabled || targetPicking) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
 })();
 </script>`;
 
@@ -300,14 +347,37 @@ function normalizeSourceText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
+function sanitizeCssValue(value) {
+  const text = String(value ?? '').trim();
+  if (!text || /[<>{};\r\n]/.test(text)) return '';
+  return text;
+}
+
+function escapeHtmlText(value) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function escapeHtmlAttribute(value) {
+  return escapeHtmlText(value).replace(/"/g, '&quot;');
+}
+
 function hasElementMarker(html, id) {
   return new RegExp(`data-editor-id\\s*=\\s*["']${escapeRegExp(id)}["']`, 'i').test(html);
 }
 
 function updateElementText(html, id, text) {
   const marker = `data-editor-id\\s*=\\s*["']${escapeRegExp(id)}["']`;
-  const elementPattern = new RegExp(`(<([a-zA-Z][\\w:-]*)\\b[^>]*${marker}[^>]*>)[\\s\\S]*?(</\\2\\s*>)`, 'i');
-  return html.replace(elementPattern, (_match, openingTag, _tagName, closingTag) => `${openingTag}${text}${closingTag}`);
+  const elementPattern = new RegExp(`(<([a-zA-Z][\\w:-]*)\\b[^>]*${marker}[^>]*>)([\\s\\S]*?)(</\\2\\s*>)`, 'i');
+  return html.replace(elementPattern, (_match, openingTag, _tagName, innerHTML, closingTag) => {
+    const replacement = escapeHtmlText(text);
+    let changed = false;
+    const preservedChildren = innerHTML.replace(/(^|>)([^<]+)(?=<|$)/g, (part, prefix, content) => {
+      if (changed || !String(content).trim()) return part;
+      changed = true;
+      return `${prefix}${replacement}`;
+    });
+    return `${openingTag}${changed ? preservedChildren : `${innerHTML}${replacement}`}${closingTag}`;
+  });
 }
 
 function responsiveMedia(viewport) {
@@ -324,7 +394,9 @@ function updateResponsiveStyles(html, id, styles, viewport) {
   const names = { fontSize: 'font-size', color: 'color', width: 'width', height: 'height', margin: 'margin', padding: 'padding', backgroundImage: 'background-image', transform: 'transform' };
   const styleText = Object.entries(styles || {})
     .filter(([name, value]) => names[name] && value !== undefined && String(value) !== '')
-    .map(([name, value]) => `${names[name]}: ${String(value).replace(/<\/style/gi, '<\\/style')};`)
+    .map(([name, value]) => [name, sanitizeCssValue(value)])
+    .filter(([, value]) => value)
+    .map(([name, value]) => `${names[name]}: ${value};`)
     .join(' ');
   if (!styleText) return html;
   const safeId = String(id).replace(/(["\\])/g, '\\$1');
@@ -363,12 +435,13 @@ function updateElementStyles(html, id, styles, viewport = 'desktop') {
       transform: 'transform',
     };
     Object.entries(styles || {}).forEach(([name, value]) => {
-      if (value !== undefined && names[name]) styleValues.set(names[name], String(value));
+      const safeValue = sanitizeCssValue(value);
+      if (safeValue && names[name]) styleValues.set(names[name], safeValue);
     });
 
     const styleText = Array.from(styleValues.entries()).map(([name, value]) => `${name}: ${value}`).join('; ');
-    if (styleMatch) return openingTag.replace(styleMatch[0], `style="${styleText}"`);
-    return openingTag.replace(/>$/, ` style="${styleText}">`);
+    if (styleMatch) return openingTag.replace(styleMatch[0], `style="${escapeHtmlAttribute(styleText)}"`);
+    return openingTag.replace(/>$/, ` style="${escapeHtmlAttribute(styleText)}">`);
   });
   return updated;
 }
@@ -386,6 +459,26 @@ function updateElementAttributes(html, id, attributes) {
       else updated = updated.replace(/>$/, ` ${name}="${safeValue}">`);
     });
     return updated;
+  });
+}
+
+function updateNestedImageAttribute(html, id, nestedImage) {
+  if (!nestedImage || typeof nestedImage !== 'object') return html;
+  const marker = `data-editor-id\\s*=\\s*["']${escapeRegExp(id)}["']`;
+  const parentPattern = new RegExp(`(<([a-zA-Z][\\w:-]*)\\b[^>]*${marker}[^>]*>)([\\s\\S]*?)(</\\2\\s*>)`, 'i');
+  const wantedIndex = Number.isInteger(nestedImage.index) && nestedImage.index >= 0 ? nestedImage.index : 0;
+  return html.replace(parentPattern, (_match, openingTag, _tagName, innerHTML, closingTag) => {
+    let imageIndex = 0;
+    const updatedInner = innerHTML.replace(/<img\b[^>]*>/gi, (imageTag) => {
+      if (imageIndex++ !== wantedIndex) return imageTag;
+      const source = typeof nestedImage.src === 'string' ? nestedImage.src : '';
+      if (!source) return imageTag;
+      const sourcePattern = /\bsrc\s*=\s*(["'])(.*?)\1/i;
+      const safeSource = escapeHtmlAttribute(source);
+      if (sourcePattern.test(imageTag)) return imageTag.replace(sourcePattern, `src="${safeSource}"`);
+      return imageTag.replace(/>$/, ` src="${safeSource}">`);
+    });
+    return `${openingTag}${updatedInner}${closingTag}`;
   });
 }
 
@@ -474,10 +567,12 @@ function markElementByHint(html, payload) {
 function upsertDynamicOverride(html, payload) {
   const selector = String(payload.selector || '').trim().replace(/[{};]/g, '');
   if (!selector) return html;
-  const names = { fontSize: 'font-size', color: 'color', width: 'width', height: 'height', margin: 'margin', padding: 'padding', transform: 'transform' };
+  const names = { fontSize: 'font-size', color: 'color', width: 'width', height: 'height', margin: 'margin', padding: 'padding', backgroundImage: 'background-image', transform: 'transform' };
   const declarations = Object.entries(payload.styles || {})
     .filter(([name, value]) => names[name] && value !== undefined && String(value) !== '')
-    .map(([name, value]) => `${names[name]}: ${String(value).replace(/<\/style/gi, '<\\/style')}${name === 'transform' ? '' : ' !important'};`)
+    .map(([name, value]) => [name, sanitizeCssValue(value)])
+    .filter(([, value]) => value)
+    .map(([name, value]) => `${names[name]}: ${value}${name === 'transform' ? '' : ' !important'};`)
     .join(' ');
   if (!declarations) return html;
   const safeKey = `dynamic-${String(payload.id || 'element')}`.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -500,16 +595,57 @@ function upsertDynamicContentOverride(html, payload) {
   const selector = String(payload.selector || '').trim().replace(/[{};]/g, '');
   if (!selector) return html;
   const attributes = payload.attributes || {};
-  const text = typeof payload.text === 'string' ? payload.text : '';
+  const hasText = Object.prototype.hasOwnProperty.call(payload, 'text') && typeof payload.text === 'string';
+  const text = hasText ? payload.text : '';
   const src = typeof attributes.src === 'string' ? attributes.src : '';
-  if (!text && !src) return html;
-  const safeKey = `dynamic-content-${String(payload.id || 'element')}`.replace(/[^a-zA-Z0-9_-]/g, '_');
-  const config = JSON.stringify({ selector, text, src }).replace(/<\/script/gi, '<\\/script');
-  const block = `<script data-editor-dynamic-content="${safeKey}">(()=>{const c=${config};const apply=()=>{document.querySelectorAll(c.selector).forEach((e)=>{if(c.text&&e.textContent!==c.text)e.textContent=c.text;if(c.src&&e.tagName==='IMG'&&e.getAttribute('src')!==c.src)e.setAttribute('src',c.src);});};new MutationObserver(apply).observe(document.documentElement,{childList:true,subtree:true});window.addEventListener('load',apply);setTimeout(apply,0);})();</script>`;
+  const nestedImage = payload.nestedImage && typeof payload.nestedImage === 'object' ? payload.nestedImage : null;
+  const nestedSelector = nestedImage && typeof nestedImage.selector === 'string' ? nestedImage.selector : '';
+  const nestedSrc = nestedImage && typeof nestedImage.src === 'string' ? nestedImage.src : '';
+  if (!hasText && !src && !nestedSelector) return html;
+  const safeKey = `dynamic-content-${interactionHash(selector)}`;
+  const config = JSON.stringify({ selector, text: hasText ? text : null, src: src || null, nestedSelector: nestedSelector || null, nestedSrc: nestedSrc || null }).replace(/<\/script/gi, '<\\/script');
+  const block = `<script data-editor-dynamic-content="${safeKey}">(()=>{const c=${config};const apply=()=>{document.querySelectorAll(c.selector).forEach((e)=>{if(c.text!==null){if(e.childElementCount===0){if(e.textContent!==c.text)e.textContent=c.text}else{const walker=document.createTreeWalker(e,NodeFilter.SHOW_TEXT);let node;let changed=false;while((node=walker.nextNode())){if(String(node.textContent||'').trim()){if(node.textContent!==c.text)node.textContent=c.text;changed=true;break}}if(!changed&&c.text)e.appendChild(document.createTextNode(c.text))}}if(c.src&&e.tagName==='IMG'&&e.getAttribute('src')!==c.src)e.setAttribute('src',c.src);if(c.nestedSelector&&c.nestedSrc){const image=e.querySelector(c.nestedSelector)||document.querySelector(c.nestedSelector);if(image&&e.contains(image)&&image.tagName==='IMG'&&image.getAttribute('src')!==c.nestedSrc)image.setAttribute('src',c.nestedSrc);}});};new MutationObserver(apply).observe(document.documentElement,{childList:true,subtree:true});window.addEventListener('load',apply);setTimeout(apply,0);})();</script>`;
   const existing = new RegExp(`<script\\b[^>]*data-editor-dynamic-content="${escapeRegExp(safeKey)}"[^>]*>[\\s\\S]*?</script>`, 'i');
-  if (existing.test(html)) return html.replace(existing, block);
-  if (/<\/body>/i.test(html)) return html.replace(/<\/body>/i, `${block}</body>`);
-  return `${html}${block}`;
+  const selectorSignature = `"selector":${JSON.stringify(selector)}`;
+  const existingBySelector = new RegExp(`<script\\b[^>]*data-editor-dynamic-content="[^"]+"[^>]*>[\\s\\S]*?${escapeRegExp(selectorSignature)}[\\s\\S]*?</script>`, 'gi');
+  const withoutExisting = html.replace(existing, '').replace(existingBySelector, '');
+  if (/<\/body>/i.test(withoutExisting)) return withoutExisting.replace(/<\/body>/i, `${block}</body>`);
+  return `${withoutExisting}${block}`;
+}
+
+function interactionHash(value) {
+  let hash = 2166136261;
+  for (const character of String(value)) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+function upsertInteractionScript(html, payload) {
+  const actions = new Set(['navigate', 'back', 'show', 'hide', 'toggle', 'classToggle', 'play', 'pause']);
+  const action = String(payload.action || '').trim();
+  if (!actions.has(action)) return html;
+  const sourceSelector = String(payload.sourceSelector || '').trim().replace(/[{};]/g, '');
+  const targetSelector = String(payload.targetSelector || '').trim().replace(/[{};]/g, '');
+  const targetPage = String(payload.targetPage || '').trim().replace(/[<>"']/g, '');
+  const className = String(payload.className || '').trim().replace(/[^\w\-\u4e00-\u9fff]/g, '');
+  if (!sourceSelector) return html;
+  if (['show', 'hide', 'toggle', 'classToggle', 'play', 'pause'].includes(action) && !targetSelector) return html;
+  if (action === 'navigate' && !targetPage) return html;
+  if (action === 'classToggle' && !className) return html;
+
+  // One source element owns one interaction rule. Changing its action or
+  // target replaces the previous rule instead of stacking multiple clicks.
+  const key = `interaction-${interactionHash(`${payload.pagePath || ''}|${sourceSelector}`)}`;
+  const config = JSON.stringify({ key, sourceSelector, targetSelector, action, targetPage, className }).replace(/<\/script/gi, '<\\/script');
+  const block = `<script data-editor-interaction="${key}">(()=>{const c=${config};const show=(e)=>{e.hidden=false;const previous=e.dataset.editorPreviousDisplay;if(previous&&previous!=='none'){e.style.display=previous;return}delete e.dataset.editorPreviousDisplay;e.style.removeProperty('display');if(getComputedStyle(e).display==='none')e.style.display='block'};const hide=(e)=>{const current=e.style.display||'';if(e.dataset.editorPreviousDisplay===undefined)e.dataset.editorPreviousDisplay=current==='none'?'':current;e.hidden=true};const bind=()=>{try{document.querySelectorAll(c.sourceSelector).forEach((source)=>{if(source.dataset.editorInteractionBound===c.key)return;source.dataset.editorInteractionBound=c.key;source.addEventListener('click',()=>{try{if(c.action==='navigate'){window.location.href=c.targetPage;return}if(c.action==='back'){window.history.back();return}const targets=c.targetSelector?Array.from(document.querySelectorAll(c.targetSelector)):[source];if(c.action==='show')targets.forEach(show);if(c.action==='hide')targets.forEach(hide);if(c.action==='toggle')targets.forEach((e)=>e.hidden?show(e):hide(e));if(c.action==='classToggle')targets.forEach((e)=>e.classList.toggle(c.className));if(c.action==='play')targets.forEach((e)=>{if(typeof e.play==='function')void e.play()});if(c.action==='pause')targets.forEach((e)=>{if(typeof e.pause==='function')e.pause()})}catch(error){console.error('[主题单元编辑器] 交互执行失败',error)}})})}catch(error){console.error('[主题单元编辑器] 交互选择器无效',error)}};bind();new MutationObserver(bind).observe(document.documentElement,{childList:true,subtree:true});})();</script>`;
+  const existing = new RegExp(`<script\\b[^>]*data-editor-interaction="${escapeRegExp(key)}"[^>]*>[\\s\\S]*?</script>`, 'i');
+  const sourceSignature = `"sourceSelector":${JSON.stringify(sourceSelector)}`;
+  const existingBySource = new RegExp(`<script\\b[^>]*data-editor-interaction="[^"]+"[^>]*>[\\s\\S]*?${escapeRegExp(sourceSignature)}[\\s\\S]*?</script>`, 'gi');
+  const withoutExisting = html.replace(existing, '').replace(existingBySource, '');
+  if (/<\/body>/i.test(withoutExisting)) return withoutExisting.replace(/<\/body>/i, `${block}</body>`);
+  return `${withoutExisting}${block}`;
 }
 
 function createWindow() {
@@ -599,6 +735,7 @@ ipcMain.handle('project:save-element', async (_event, payload) => {
       if (typeof payload.text === 'string') updated = updateElementText(updated, payload.id, payload.text);
       updated = updateElementStyles(updated, payload.id, payload.styles || {}, payload.viewport || 'desktop');
       updated = updateElementAttributes(updated, payload.id, payload.attributes || {});
+      updated = updateNestedImageAttribute(updated, payload.id, payload.nestedImage);
     }
     if (updated === original) return { ok: false, error: '没有找到可保存的元素修改' };
 
@@ -607,6 +744,47 @@ ipcMain.handle('project:save-element', async (_event, payload) => {
     return { ok: true };
   } catch {
     return { ok: false, error: '保存失败，原文件未完成写回' };
+  }
+});
+
+ipcMain.handle('project:save-interaction', async (_event, payload) => {
+  const actions = new Set(['navigate', 'back', 'show', 'hide', 'toggle', 'classToggle', 'play', 'pause']);
+  if (!payload || typeof payload.projectId !== 'string' || typeof payload.pagePath !== 'string' || typeof payload.sourceSelector !== 'string' || !actions.has(payload.action)) {
+    return { ok: false, error: '交互参数无效' };
+  }
+  const rootPath = projects.get(payload.projectId);
+  const entryPath = rootPath && resolveProjectFile(rootPath, payload.pagePath);
+  if (!entryPath || path.extname(entryPath).toLowerCase() !== '.html') return { ok: false, error: '当前页面路径无效' };
+  let interactionPayload = { ...payload };
+  if (payload.action === 'navigate') {
+    const rawTargetPage = String(payload.targetPage || '').trim();
+    if (!rawTargetPage || path.isAbsolute(rawTargetPage) || rawTargetPage.startsWith('/') || rawTargetPage.startsWith('\\') || /^[a-z][a-z\d+.-]*:/i.test(rawTargetPage)) {
+      return { ok: false, error: '目标页面必须是项目内的相对 HTML 路径' };
+    }
+    const targetPath = rootPath && resolveProjectFile(rootPath, rawTargetPage);
+    if (!targetPath || path.extname(targetPath).toLowerCase() !== '.html') return { ok: false, error: '目标页面路径无效' };
+    try {
+      const targetStat = await fs.stat(targetPath);
+      if (!targetStat.isFile()) return { ok: false, error: '目标页面不存在' };
+    } catch {
+      return { ok: false, error: '目标页面不存在' };
+    }
+    const relativeTarget = path.relative(rootPath, targetPath).replaceAll(path.sep, '/');
+    interactionPayload.targetPage = `/${relativeTarget}`;
+  }
+  if (['show', 'hide', 'toggle', 'classToggle', 'play', 'pause'].includes(payload.action) && typeof payload.targetSelector !== 'string') {
+    return { ok: false, error: '请先选择交互目标' };
+  }
+  if (payload.action === 'classToggle' && !String(payload.className || '').trim()) return { ok: false, error: '请提供要切换的样式类名' };
+  try {
+    const original = await fs.readFile(entryPath, 'utf8');
+    const updated = upsertInteractionScript(original, interactionPayload);
+    if (updated === original) return { ok: false, error: '交互配置不完整或未发生变化' };
+    await createSnapshot(payload.projectId, entryPath, payload.pagePath);
+    await fs.writeFile(entryPath, updated, 'utf8');
+    return { ok: true };
+  } catch {
+    return { ok: false, error: '交互保存失败，原文件未完成写回' };
   }
 });
 

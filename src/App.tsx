@@ -25,6 +25,7 @@ type SelectedElement = {
   className?: string;
   outerHTML?: string;
   src?: string;
+  nestedImage?: { selector: string; src: string; index: number } | null;
   rect: { x: number; y: number; width: number; height: number };
   styles: ElementStyles;
 };
@@ -38,6 +39,7 @@ type EditorChange = {
 };
 
 type Version = { id: string; pagePath: string; createdAt: string };
+type InteractionAction = 'none' | 'navigate' | 'back' | 'show' | 'hide' | 'toggle' | 'classToggle' | 'play' | 'pause';
 
 function StartView({ onOpen }: { onOpen: () => Promise<void> }) {
   const [message, setMessage] = useState('请选择一个主题单元项目开始');
@@ -77,6 +79,12 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
   const [versionOpen, setVersionOpen] = useState(false);
   const [versions, setVersions] = useState<Version[]>([]);
   const [versionMessage, setVersionMessage] = useState('');
+  const [interactionAction, setInteractionAction] = useState<InteractionAction>('none');
+  const [interactionTarget, setInteractionTarget] = useState('');
+  const [interactionPage, setInteractionPage] = useState('');
+  const [interactionClassName, setInteractionClassName] = useState('');
+  const [interactionDirty, setInteractionDirty] = useState(false);
+  const [pickingInteractionTarget, setPickingInteractionTarget] = useState(false);
   const [previewNonce, setPreviewNonce] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const previewAreaRef = useRef<HTMLElement>(null);
@@ -108,12 +116,23 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
       selectedIdRef.current = '';
       changedStyleKeysRef.current.clear();
       textChangedRef.current = false;
+      setInteractionAction('none');
+      setInteractionTarget('');
+      setInteractionPage('');
+      setInteractionClassName('');
+      setInteractionDirty(false);
       return;
     }
     if (selectedIdRef.current !== selected.id) {
       selectedIdRef.current = selected.id;
       changedStyleKeysRef.current.clear();
       textChangedRef.current = false;
+      setInteractionAction('none');
+      setInteractionTarget('');
+      setInteractionPage('');
+      setInteractionClassName('');
+      setInteractionDirty(false);
+      setPickingInteractionTarget(false);
     }
     setDraftText(selected.text);
     setDraftStyles({ ...emptyStyles(), ...selected.styles });
@@ -136,6 +155,12 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
       }
       if (event.data.type === 'selected') {
         setSelected({ ...event.data, styles: { ...emptyStyles(), ...event.data.styles } } as SelectedElement);
+      }
+      if (event.data.type === 'target-selected') {
+        setInteractionTarget(String(event.data.selector || ''));
+        setPickingInteractionTarget(false);
+        setInteractionDirty(true);
+        setSaveMessage('已选择交互目标');
       }
       if (event.data.type === 'changed') {
         const change: EditorChange = { id: event.data.id, kind: 'style', property: event.data.property, before: event.data.before, after: event.data.after };
@@ -215,8 +240,8 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
     sendToPreview({ type: 'apply-style', id: selected.id, property, value });
   }
 
-  async function saveElement() {
-    if (!selected) return;
+  async function saveElement(): Promise<boolean> {
+    if (!selected) return false;
     const stylesToSave = Object.fromEntries(Array.from(changedStyleKeysRef.current).map((property) => [property, draftStyles[property]]));
     const result = await window.editorBridge.saveElement({
       projectId: project.id,
@@ -234,17 +259,60 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
       outerHTML: selected.outerHTML,
       styles: stylesToSave,
       attributes: selected.src ? { src: selected.src } : {},
+      nestedImage: selected.nestedImage || undefined,
     });
-    if (!result.ok) { setSaveMessage(result.error); return; }
+    if (!result.ok) { setSaveMessage(result.error); return false; }
     setDirty(false);
     setSelected((current) => current ? { ...current, auto: false } : current);
     setSaveMessage(`已保存到 ${currentPage.path}`);
+    return true;
+  }
+
+  function changeInteractionAction(value: InteractionAction) {
+    setInteractionAction(value);
+    setInteractionDirty(value !== 'none');
+    setSaveMessage('');
+  }
+
+  function pickInteractionTarget() {
+    if (!selected) return;
+    setPickingInteractionTarget(true);
+    setInteractionDirty(true);
+    setSaveMessage('请点击预览中的目标元素');
+    sendToPreview({ type: 'set-interaction-target', enabled: 'true' });
+  }
+
+  async function saveInteraction(): Promise<boolean> {
+    if (!selected || interactionAction === 'none' || !selected.selector) return false;
+    const needsTarget = ['show', 'hide', 'toggle', 'classToggle', 'play', 'pause'].includes(interactionAction);
+    if (needsTarget && !interactionTarget) { setSaveMessage('请先选择交互目标'); return false; }
+    if (interactionAction === 'navigate' && !interactionPage) { setSaveMessage('请选择目标页面'); return false; }
+    if (interactionAction === 'classToggle' && !interactionClassName.trim()) { setSaveMessage('请输入要切换的样式类名'); return false; }
+    const result = await window.editorBridge.saveInteraction({
+      projectId: project.id,
+      pagePath: currentPage.path,
+      sourceSelector: selected.selector,
+      action: interactionAction,
+      targetSelector: needsTarget ? interactionTarget : undefined,
+      targetPage: interactionAction === 'navigate' ? interactionPage : undefined,
+      className: interactionAction === 'classToggle' ? interactionClassName.trim() : undefined,
+    });
+    if (!result.ok) { setSaveMessage(result.error); return false; }
+    setInteractionDirty(false);
+    setSaveMessage(`交互已保存到 ${currentPage.path}`);
+    return true;
+  }
+
+  async function saveAll() {
+    if (dirty && !(await saveElement())) return;
+    if (interactionDirty) await saveInteraction();
   }
 
   async function replaceImage() {
     const isImage = selected?.tag === 'img';
+    const nestedImage = selected?.nestedImage || null;
     const hasBackground = Boolean(selected?.styles.backgroundImage && selected.styles.backgroundImage !== 'none');
-    if (!selected || (!isImage && !hasBackground)) return;
+    if (!selected || (!isImage && !nestedImage && !hasBackground)) return;
     const sourcePath = await window.editorBridge.chooseAsset();
     if (!sourcePath) return;
     const result = await window.editorBridge.copyAsset({ projectId: project.id, pagePath: currentPage.path, sourcePath });
@@ -252,6 +320,9 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
     if (isImage) {
       sendToPreview({ type: 'apply-attribute', id: selected.id, name: 'src', value: result.relativePath });
       setSelected({ ...selected, src: result.relativePath });
+    } else if (nestedImage) {
+      sendToPreview({ type: 'apply-nested-attribute', id: selected.id, selector: nestedImage.selector, name: 'src', value: result.relativePath });
+      setSelected({ ...selected, nestedImage: { ...nestedImage, src: result.relativePath } });
     } else {
       const backgroundImage = `url("${result.relativePath}")`;
       changedStyleKeysRef.current.add('backgroundImage');
@@ -280,7 +351,7 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
   }
 
   async function restoreVersion(version: Version) {
-    if (dirty && !window.confirm('当前还有未保存修改，恢复版本会丢弃这些修改，是否继续？')) return;
+    if ((dirty || interactionDirty) && !window.confirm('当前还有未保存修改，恢复版本会丢弃这些修改，是否继续？')) return;
     const result = await window.editorBridge.restoreVersion({ projectId: project.id, pagePath: currentPage.path, versionId: version.id });
     if (!result.ok) { setVersionMessage(result.error); return; }
     setVersionOpen(false);
@@ -293,7 +364,7 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
   }
 
   function changePage(page: { path: string; url: string }) {
-    if (dirty && !window.confirm('当前页面有未保存修改，切换页面会丢弃这些修改，是否继续？')) return;
+    if ((dirty || interactionDirty) && !window.confirm('当前页面有未保存修改，切换页面会丢弃这些修改，是否继续？')) return;
     setCurrentPage(page);
     setSelected(null);
     setUndoStack([]);
@@ -304,12 +375,12 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
   }
 
   function closeProject() {
-    if (dirty && !window.confirm('当前有未保存修改，关闭后会丢失，是否继续？')) return;
+    if ((dirty || interactionDirty) && !window.confirm('当前有未保存修改，关闭后会丢失，是否继续？')) return;
     onClose();
   }
 
   function reloadPreview() {
-    if (dirty && !window.confirm('当前有未保存修改，刷新会丢弃预览修改，是否继续？')) return;
+    if ((dirty || interactionDirty) && !window.confirm('当前有未保存修改，刷新会丢弃预览修改，是否继续？')) return;
     setSelected(null);
     setDirty(false);
     setUndoStack([]);
@@ -318,6 +389,7 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
   }
 
   const saveHasError = /失败|找不到|无效|失效|暂时/.test(saveMessage);
+  const hasUnsavedChanges = dirty || interactionDirty;
 
   return (
     <main className="editor-shell">
@@ -331,13 +403,13 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
           <button className={mode === 'test' ? 'toolbar-button active' : 'toolbar-button'} type="button" onClick={() => setMode('test')}>测试</button>
         </div>
         <div className="toolbar-actions">
-          <span className={dirty ? 'save-state dirty' : 'save-state'}>{dirty ? '有未保存修改' : '已保存'}</span>
+          <span className={hasUnsavedChanges ? 'save-state dirty' : 'save-state'}>{hasUnsavedChanges ? '有未保存修改' : '已保存'}</span>
           {saveMessage && <span className={saveHasError ? 'toolbar-save-message error' : 'toolbar-save-message'}>{saveMessage}</span>}
           <button className="toolbar-button" type="button" onClick={reloadPreview}>刷新</button>
           <button className="toolbar-button" type="button" disabled={undoStack.length === 0} onClick={undo}>撤销</button>
           <button className="toolbar-button" type="button" disabled={redoStack.length === 0} onClick={redo}>重做</button>
           <button className="toolbar-button" type="button" onClick={() => void openVersions()}>版本</button>
-          <button className="toolbar-button primary-toolbar-button" type="button" disabled={!dirty || !selected} onClick={() => void saveElement()}>保存</button>
+          <button className="toolbar-button primary-toolbar-button" type="button" disabled={!hasUnsavedChanges || !selected} onClick={() => void saveAll()}>保存</button>
           <button className="toolbar-button" type="button" onClick={closeProject}>关闭项目</button>
         </div>
       </header>
@@ -364,7 +436,15 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
             <div className="property-grid">
               {([['fontSize', '字号'], ['width', '宽度'], ['height', '高度'], ['margin', '外边距'], ['padding', '内边距'], ['color', '颜色']] as Array<[StyleKey, string]>).map(([property, label]) => <label className="property-row" key={property}><span>{label}</span><input value={draftStyles[property]} onChange={(event) => handleStyleChange(property, event.target.value)} placeholder="保持原值" /></label>)}
             </div>
-            {((selected.tag === 'img') || (selected.styles.backgroundImage && selected.styles.backgroundImage !== 'none')) && <button className="asset-button" type="button" onClick={() => void replaceImage()}>{selected.tag === 'img' ? '替换图片' : '替换背景图'}</button>}
+            {((selected.tag === 'img') || selected.nestedImage || (selected.styles.backgroundImage && selected.styles.backgroundImage !== 'none')) && <button className="asset-button" type="button" onClick={() => void replaceImage()}>{selected.tag === 'img' ? '替换图片' : selected.nestedImage ? '替换按钮图片' : '替换背景图'}</button>}
+            <section className="interaction-panel" aria-label="基础交互">
+              <div className="interaction-title">基础交互</div>
+              <label className="property-row"><span>点击后动作</span><select value={interactionAction} onChange={(event) => changeInteractionAction(event.target.value as InteractionAction)}><option value="none">不配置</option><option value="navigate">跳转页面</option><option value="back">返回上一页</option><option value="show">显示目标</option><option value="hide">隐藏目标</option><option value="toggle">切换显示</option><option value="classToggle">切换样式</option><option value="play">播放媒体</option><option value="pause">暂停媒体</option></select></label>
+              {interactionAction === 'navigate' && <label className="property-row"><span>目标页面</span><select value={interactionPage} onChange={(event) => { setInteractionPage(event.target.value); setInteractionDirty(true); }}><option value="">请选择页面</option>{project.pages.map((page) => <option key={page.path} value={page.path}>{page.path}</option>)}</select></label>}
+              {interactionAction === 'classToggle' && <label className="property-row"><span>样式类名</span><input value={interactionClassName} onChange={(event) => { setInteractionClassName(event.target.value); setInteractionDirty(true); }} placeholder="例如 is-active" /></label>}
+              {interactionAction !== 'none' && interactionAction !== 'navigate' && interactionAction !== 'back' && <div className="interaction-target-row"><div className="interaction-target-value" title={interactionTarget}>{interactionTarget || '尚未选择目标'}</div><button className="toolbar-button" type="button" onClick={pickInteractionTarget}>{pickingInteractionTarget ? '请点击目标' : '选择目标'}</button></div>}
+              {interactionAction !== 'none' && <p className="interaction-help">先选择动作；需要目标时点击“选择目标”，再点击预览中的元素，最后点击顶部“保存”。</p>}
+            </section>
             <div className="selection-help">编辑模式：点击选中，按住拖动移动。测试模式：直接操作网页。</div>
             {selected.auto && <div className="selection-warning">这是普通网页元素，保存时编辑器会自动找到它并建立标识，不需要手动改 HTML。</div>}
             {saveMessage && <div className={saveHasError ? 'save-message error-text' : 'save-message'}>{saveMessage}</div>}

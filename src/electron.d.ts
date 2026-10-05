@@ -8,7 +8,8 @@ declare global {
   interface Window {
     editorBridge: {
       openProject: () => Promise<OpenProjectResult>;
-      saveElement: (payload: { projectId: string; pagePath: string; id: string; viewport?: 'desktop' | 'tablet' | 'mobilePortrait' | 'mobileLandscape'; auto?: boolean; tag?: string; path?: string; tagIndex?: number; selector?: string; sourceType?: 'html' | 'dynamic'; className?: string; text?: string; outerHTML?: string; styles?: Record<string, string>; attributes?: Record<string, string> }) => Promise<{ ok: true } | { ok: false; error: string }>;
+      saveElement: (payload: { projectId: string; pagePath: string; id: string; viewport?: 'desktop' | 'tablet' | 'mobilePortrait' | 'mobileLandscape'; auto?: boolean; tag?: string; path?: string; tagIndex?: number; selector?: string; sourceType?: 'html' | 'dynamic'; className?: string; text?: string; outerHTML?: string; styles?: Record<string, string>; attributes?: Record<string, string>; nestedImage?: { selector: string; src: string; index: number } | null }) => Promise<{ ok: true } | { ok: false; error: string }>;
+      saveInteraction: (payload: { projectId: string; pagePath: string; sourceSelector: string; action: 'navigate' | 'back' | 'show' | 'hide' | 'toggle' | 'classToggle' | 'play' | 'pause'; targetSelector?: string; targetPage?: string; className?: string }) => Promise<{ ok: true } | { ok: false; error: string }>;
       markElement: (payload: { projectId: string; pagePath: string; id: string; tag: string; text: string; outerHTML?: string; styles?: Record<string, string>; attributes?: Record<string, string> }) => Promise<{ ok: true } | { ok: false; error: string }>;
       chooseAsset: () => Promise<string | null>;
       copyAsset: (payload: { projectId: string; pagePath: string; sourcePath: string }) => Promise<{ ok: true; relativePath: string } | { ok: false; error: string }>;
