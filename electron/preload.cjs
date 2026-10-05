@@ -9,5 +9,6 @@ contextBridge.exposeInMainWorld('editorBridge', {
   copyAsset: (payload) => ipcRenderer.invoke('asset:copy', payload),
   listVersions: (payload) => ipcRenderer.invoke('project:list-versions', payload),
   restoreVersion: (payload) => ipcRenderer.invoke('project:restore-version', payload),
+  deleteVersion: (payload) => ipcRenderer.invoke('project:delete-version', payload),
   saveSettings: (payload) => ipcRenderer.invoke('project:save-settings', payload),
 });

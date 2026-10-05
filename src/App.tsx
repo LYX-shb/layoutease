@@ -38,7 +38,7 @@ type EditorChange = {
   after: string;
 };
 
-type Version = { id: string; pagePath: string; createdAt: string };
+type Version = { id: string; pagePath: string; reason?: string; files?: string; createdAt: string };
 type InteractionAction = 'none' | 'navigate' | 'back' | 'show' | 'hide' | 'toggle' | 'classToggle' | 'play' | 'pause';
 
 function StartView({ onOpen }: { onOpen: () => Promise<void> }) {
@@ -363,6 +363,14 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
     setPreviewNonce((current) => current + 1);
   }
 
+  async function deleteVersion(version: Version) {
+    if (!window.confirm(`确定删除 ${new Date(version.createdAt).toLocaleString()} 的版本吗？删除后不能恢复。`)) return;
+    const result = await window.editorBridge.deleteVersion({ projectId: project.id, versionId: version.id });
+    if (!result.ok) { setVersionMessage(result.error); return; }
+    setVersions((current) => current.filter((item) => item.id !== version.id));
+    setVersionMessage('版本已删除');
+  }
+
   function changePage(page: { path: string; url: string }) {
     if ((dirty || interactionDirty) && !window.confirm('当前页面有未保存修改，切换页面会丢弃这些修改，是否继续？')) return;
     setCurrentPage(page);
@@ -451,7 +459,7 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
           </> : <p className="empty-inspector">{mode === 'edit' ? '点击预览中的元素进行编辑。' : '测试模式下可以直接操作网页。'}</p>}
         </aside>
       </section>
-      {versionOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setVersionOpen(false)}><section className="version-modal" role="dialog" aria-modal="true" aria-labelledby="version-title" onMouseDown={(event) => event.stopPropagation()}><div className="version-header"><strong id="version-title">{currentPage.path} 的保存版本</strong><button className="close-button" type="button" onClick={() => setVersionOpen(false)}>×</button></div>{versionMessage && <p className="version-empty">{versionMessage}</p>}{versions.map((version) => <div className="version-row" key={version.id}><span>{new Date(version.createdAt).toLocaleString()}</span><button className="toolbar-button" type="button" onClick={() => void restoreVersion(version)}>恢复</button></div>)}</section></div>}
+      {versionOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setVersionOpen(false)}><section className="version-modal" role="dialog" aria-modal="true" aria-labelledby="version-title" onMouseDown={(event) => event.stopPropagation()}><div className="version-header"><strong id="version-title">{currentPage.path} 的保存版本</strong><button className="close-button" type="button" onClick={() => setVersionOpen(false)}>×</button></div>{versionMessage && <p className="version-empty">{versionMessage}</p>}{versions.map((version) => <div className="version-row" key={version.id}><span><strong>{new Date(version.createdAt).toLocaleString()}</strong><small>{version.reason || '保存版本'} · {version.files || '当前页面'}</small></span><div className="version-actions"><button className="toolbar-button" type="button" onClick={() => void restoreVersion(version)}>恢复</button><button className="toolbar-button danger-toolbar-button" type="button" onClick={() => void deleteVersion(version)}>删除</button></div></div>)}</section></div>}
     </main>
   );
 }

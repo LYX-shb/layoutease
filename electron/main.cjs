@@ -319,6 +319,63 @@ async function createSnapshot(projectId, entryPath, pagePath) {
   return snapshotPath;
 }
 
+async function createProjectSnapshot(projectId, rootPath, pagePath, reason = '编辑保存') {
+  const directory = snapshotDirectory(projectId);
+  const id = `${Date.now()}-${crypto.randomUUID()}`;
+  const snapshotPath = path.join(directory, id);
+  const filesPath = path.join(snapshotPath, 'files');
+  await fs.mkdir(filesPath, { recursive: true });
+  await fs.cp(rootPath, filesPath, {
+    recursive: true,
+    filter: (source) => {
+      const relative = path.relative(rootPath, source);
+      if (!relative) return true;
+      const parts = relative.split(path.sep);
+      return !parts.includes('node_modules') && !parts.includes('.git') && !parts.includes('.editor-snapshots');
+    },
+  });
+  await fs.writeFile(path.join(snapshotPath, 'meta.json'), JSON.stringify({
+    id,
+    pagePath,
+    reason,
+    createdAt: new Date(Number(id.split('-')[0])).toISOString(),
+  }, null, 2), 'utf8');
+  return snapshotPath;
+}
+
+function isIgnoredProjectRelative(relative) {
+  if (!relative) return false;
+  const parts = relative.split(path.sep);
+  return parts.includes('node_modules') || parts.includes('.git') || parts.includes('.editor-snapshots');
+}
+
+async function removeStaleProjectFiles(snapshotFilesPath, rootPath, relative = '') {
+  const sourceEntries = new Set(await fs.readdir(path.join(snapshotFilesPath, relative), { withFileTypes: true }).then((entries) => entries.map((entry) => entry.name)));
+  const targetDirectory = path.join(rootPath, relative);
+  const targetEntries = await fs.readdir(targetDirectory, { withFileTypes: true });
+  for (const entry of targetEntries) {
+    const entryRelative = relative ? path.join(relative, entry.name) : entry.name;
+    if (isIgnoredProjectRelative(entryRelative) || sourceEntries.has(entry.name) === false) {
+      if (sourceEntries.has(entry.name) === false && !isIgnoredProjectRelative(entryRelative)) await fs.rm(path.join(targetDirectory, entry.name), { recursive: true, force: true });
+      continue;
+    }
+    const sourcePath = path.join(snapshotFilesPath, entryRelative);
+    if (entry.isDirectory()) {
+      const sourceStat = await fs.stat(sourcePath).catch(() => null);
+      if (sourceStat?.isDirectory()) await removeStaleProjectFiles(snapshotFilesPath, rootPath, entryRelative);
+    }
+  }
+}
+
+async function restoreProjectSnapshot(filesPath, rootPath) {
+  await removeStaleProjectFiles(filesPath, rootPath);
+  await fs.cp(filesPath, rootPath, {
+    recursive: true,
+    force: true,
+    filter: (source) => !isIgnoredProjectRelative(path.relative(filesPath, source)),
+  });
+}
+
 async function readProjectSettings(rootPath) {
   try {
     const settings = JSON.parse(await fs.readFile(path.join(rootPath, '.editor-settings.json'), 'utf8'));
@@ -739,7 +796,7 @@ ipcMain.handle('project:save-element', async (_event, payload) => {
     }
     if (updated === original) return { ok: false, error: '没有找到可保存的元素修改' };
 
-    await createSnapshot(payload.projectId, entryPath, payload.pagePath || 'index.html');
+    await createProjectSnapshot(payload.projectId, rootPath, payload.pagePath || 'index.html', '元素保存');
     await fs.writeFile(entryPath, updated, 'utf8');
     return { ok: true };
   } catch {
@@ -780,7 +837,7 @@ ipcMain.handle('project:save-interaction', async (_event, payload) => {
     const original = await fs.readFile(entryPath, 'utf8');
     const updated = upsertInteractionScript(original, interactionPayload);
     if (updated === original) return { ok: false, error: '交互配置不完整或未发生变化' };
-    await createSnapshot(payload.projectId, entryPath, payload.pagePath);
+    await createProjectSnapshot(payload.projectId, rootPath, payload.pagePath, '交互保存');
     await fs.writeFile(entryPath, updated, 'utf8');
     return { ok: true };
   } catch {
@@ -802,7 +859,7 @@ ipcMain.handle('project:mark-element', async (_event, payload) => {
     updated = updateElementText(updated, payload.id, payload.text || '');
     updated = updateElementStyles(updated, payload.id, payload.styles || {}, payload.viewport || 'desktop');
     updated = updateElementAttributes(updated, payload.id, payload.attributes || {});
-    await createSnapshot(payload.projectId, entryPath, payload.pagePath);
+    await createProjectSnapshot(payload.projectId, rootPath, payload.pagePath, '标识保存');
     await fs.writeFile(entryPath, updated, 'utf8');
     return { ok: true };
   } catch {
@@ -818,12 +875,22 @@ ipcMain.handle('project:list-versions', async (_event, payload) => {
     const entries = await fs.readdir(directory, { withFileTypes: true });
     const versions = [];
     for (const entry of entries) {
-      if (!entry.isFile() || !/\.html$/i.test(entry.name)) continue;
-      const timestamp = Number(entry.name.split('-')[0]);
-      if (!Number.isFinite(timestamp)) continue;
-      const pagePath = snapshotPagePath(entry.name);
-      if (payload.pagePath && pagePath !== payload.pagePath) continue;
-      versions.push({ id: entry.name, pagePath, createdAt: new Date(timestamp).toISOString() });
+      if (entry.isDirectory()) {
+        try {
+          const metadata = JSON.parse(await fs.readFile(path.join(directory, entry.name, 'meta.json'), 'utf8'));
+          const pagePath = typeof metadata.pagePath === 'string' ? metadata.pagePath : 'index.html';
+          if (payload.pagePath && pagePath !== payload.pagePath) continue;
+          versions.push({ id: entry.name, pagePath, reason: metadata.reason || '项目快照', files: '项目全部文件', createdAt: metadata.createdAt || new Date(Number(entry.name.split('-')[0])).toISOString() });
+        } catch {
+          continue;
+        }
+      } else if (entry.isFile() && /\.html$/i.test(entry.name)) {
+        const timestamp = Number(entry.name.split('-')[0]);
+        if (!Number.isFinite(timestamp)) continue;
+        const pagePath = snapshotPagePath(entry.name);
+        if (payload.pagePath && pagePath !== payload.pagePath) continue;
+        versions.push({ id: entry.name, pagePath, reason: '旧版页面快照', files: '当前 HTML', createdAt: new Date(timestamp).toISOString() });
+      }
     }
     versions.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     return { ok: true, versions };
@@ -845,12 +912,37 @@ ipcMain.handle('project:restore-version', async (_event, payload) => {
   }
   try {
     const snapshotStat = await fs.stat(snapshotPath);
+    if (snapshotStat.isDirectory()) {
+      const metadata = JSON.parse(await fs.readFile(path.join(snapshotPath, 'meta.json'), 'utf8'));
+      const filesPath = path.join(snapshotPath, 'files');
+      const filesStat = await fs.stat(filesPath);
+      if (!filesStat.isDirectory()) return { ok: false, error: '版本文件不完整' };
+      await createProjectSnapshot(payload.projectId, rootPath, payload.pagePath, '恢复前自动备份');
+      await restoreProjectSnapshot(filesPath, rootPath);
+      return { ok: true, reason: metadata.reason || '项目快照' };
+    }
     if (!snapshotStat.isFile() || snapshotPagePath(path.basename(snapshotPath)) !== payload.pagePath) return { ok: false, error: '版本与当前页面不匹配' };
-    await createSnapshot(payload.projectId, entryPath, payload.pagePath);
+    await createProjectSnapshot(payload.projectId, rootPath, payload.pagePath, '恢复前自动备份');
     await fs.copyFile(snapshotPath, entryPath);
     return { ok: true };
   } catch {
     return { ok: false, error: '版本恢复失败，当前文件未修改' };
+  }
+});
+
+ipcMain.handle('project:delete-version', async (_event, payload) => {
+  if (!payload || typeof payload.projectId !== 'string' || typeof payload.versionId !== 'string') return { ok: false, error: '删除参数无效' };
+  if (!projects.has(payload.projectId)) return { ok: false, error: '项目会话已失效，请重新打开项目' };
+  const directory = path.resolve(snapshotDirectory(payload.projectId));
+  const snapshotPath = path.resolve(directory, path.basename(payload.versionId));
+  if (!snapshotPath.startsWith(`${directory}${path.sep}`)) return { ok: false, error: '版本路径无效' };
+  try {
+    const snapshotStat = await fs.stat(snapshotPath);
+    if (!snapshotStat.isDirectory() && !snapshotStat.isFile()) return { ok: false, error: '版本不存在' };
+    await fs.rm(snapshotPath, { recursive: true, force: false });
+    return { ok: true };
+  } catch {
+    return { ok: false, error: '版本删除失败' };
   }
 });
 
@@ -885,6 +977,7 @@ ipcMain.handle('asset:copy', async (_event, payload) => {
     if (!sourceStat.isFile()) return { ok: false, error: '素材文件无效' };
     const extension = path.extname(payload.sourcePath).toLowerCase();
     if (!['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'].includes(extension)) return { ok: false, error: '暂不支持这种素材格式' };
+    await createProjectSnapshot(payload.projectId, rootPath, payload.pagePath, '素材替换前');
     const destinationDirectory = path.join(rootPath, 'assets', 'editor');
     await fs.mkdir(destinationDirectory, { recursive: true });
     const safeBaseName = path.basename(payload.sourcePath, extension).replace(/[^\w\u4e00-\u9fff-]+/g, '-').replace(/^-+|-+$/g, '') || 'asset';
