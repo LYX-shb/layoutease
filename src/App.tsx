@@ -20,7 +20,7 @@ type SelectedElement = {
   path?: string;
   tagIndex?: number;
   selector?: string;
-  sourceType?: 'html' | 'dynamic';
+  sourceType?: 'html' | 'css' | 'dynamic';
   text: string;
   className?: string;
   outerHTML?: string;
@@ -38,8 +38,11 @@ type EditorChange = {
   after: string;
 };
 
-type Version = { id: string; pagePath: string; reason?: string; files?: string; createdAt: string };
+type Version = { id: string; pagePath: string; name?: string; reason?: string; files?: string; fileList?: string[]; createdAt: string };
 type InteractionAction = 'none' | 'navigate' | 'back' | 'show' | 'hide' | 'toggle' | 'classToggle' | 'play' | 'pause';
+type AiSettingsDraft = { apiBaseUrl: string; apiFormat: 'chat-completions' | 'responses'; model: string; apiKeyConfigured: boolean };
+type AiFileProposal = { path: string; content: string; originalContent: string };
+type AiProposal = { summary: string; files: AiFileProposal[] };
 
 function StartView({ onOpen }: { onOpen: () => Promise<void> }) {
   const [message, setMessage] = useState('请选择一个主题单元项目开始');
@@ -79,12 +82,23 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
   const [versionOpen, setVersionOpen] = useState(false);
   const [versions, setVersions] = useState<Version[]>([]);
   const [versionMessage, setVersionMessage] = useState('');
+  const [versionNameDraft, setVersionNameDraft] = useState('');
   const [interactionAction, setInteractionAction] = useState<InteractionAction>('none');
   const [interactionTarget, setInteractionTarget] = useState('');
   const [interactionPage, setInteractionPage] = useState('');
   const [interactionClassName, setInteractionClassName] = useState('');
   const [interactionDirty, setInteractionDirty] = useState(false);
   const [pickingInteractionTarget, setPickingInteractionTarget] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiSettings, setAiSettings] = useState<AiSettingsDraft>({ apiBaseUrl: 'https://api.openai.com/v1', apiFormat: 'chat-completions', model: '', apiKeyConfigured: false });
+  const [aiKeyDraft, setAiKeyDraft] = useState('');
+  const [aiContextFiles, setAiContextFiles] = useState<string[]>([]);
+  const [aiSelectedFiles, setAiSelectedFiles] = useState<string[]>([]);
+  const [aiRequest, setAiRequest] = useState('');
+  const [aiProposal, setAiProposal] = useState<AiProposal | null>(null);
+  const [aiStage, setAiStage] = useState<{ stageId: string; previewUrl: string } | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiMessage, setAiMessage] = useState('');
   const [previewNonce, setPreviewNonce] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const previewAreaRef = useRef<HTMLElement>(null);
@@ -137,6 +151,22 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
     setDraftText(selected.text);
     setDraftStyles({ ...emptyStyles(), ...selected.styles });
   }, [selected]);
+
+  useEffect(() => {
+    const currentSelection = selected;
+    if (!currentSelection?.selector) return;
+    let cancelled = false;
+    window.editorBridge.getInteraction({ projectId: project.id, pagePath: currentPage.path, sourceSelector: currentSelection.selector }).then((result) => {
+      if (cancelled || !result.ok || selectedIdRef.current !== currentSelection.id) return;
+      const interaction = result.interaction;
+      setInteractionAction(interaction?.action || 'none');
+      setInteractionTarget(interaction?.targetSelector || '');
+      setInteractionPage(interaction?.targetPage || '');
+      setInteractionClassName(interaction?.className || '');
+      setInteractionDirty(false);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [selected?.id, currentPage.path, project.id]);
 
   useEffect(() => {
     function handlePreviewMessage(event: MessageEvent) {
@@ -270,7 +300,7 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
 
   function changeInteractionAction(value: InteractionAction) {
     setInteractionAction(value);
-    setInteractionDirty(value !== 'none');
+    setInteractionDirty(true);
     setSaveMessage('');
   }
 
@@ -283,7 +313,7 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
   }
 
   async function saveInteraction(): Promise<boolean> {
-    if (!selected || interactionAction === 'none' || !selected.selector) return false;
+    if (!selected || !selected.selector) return false;
     const needsTarget = ['show', 'hide', 'toggle', 'classToggle', 'play', 'pause'].includes(interactionAction);
     if (needsTarget && !interactionTarget) { setSaveMessage('请先选择交互目标'); return false; }
     if (interactionAction === 'navigate' && !interactionPage) { setSaveMessage('请选择目标页面'); return false; }
@@ -343,11 +373,23 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
   }
 
   async function openVersions() {
-    const result = await window.editorBridge.listVersions({ projectId: project.id, pagePath: currentPage.path });
+    setVersionNameDraft('');
+    const result = await window.editorBridge.listVersions({ projectId: project.id });
     if (!result.ok) { setVersionMessage(result.error); return; }
     setVersions(result.versions);
     setVersionMessage(result.versions.length ? '' : '当前页面还没有保存版本');
     setVersionOpen(true);
+  }
+
+  async function createNamedVersion() {
+    const name = versionNameDraft.trim();
+    if (!name) { setVersionMessage('请输入版本名称'); return; }
+    const result = await window.editorBridge.createVersion({ projectId: project.id, pagePath: currentPage.path, name });
+    if (!result.ok) { setVersionMessage(result.error); return; }
+    setVersionNameDraft('');
+    setVersionMessage('项目版本已创建');
+    await openVersions();
+    setVersionMessage('项目版本已创建');
   }
 
   async function restoreVersion(version: Version) {
@@ -369,6 +411,109 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
     if (!result.ok) { setVersionMessage(result.error); return; }
     setVersions((current) => current.filter((item) => item.id !== version.id));
     setVersionMessage('版本已删除');
+  }
+
+  async function openAiAssistant() {
+    setAiOpen(true);
+    setAiMessage('正在读取 API 配置和当前页面代码…');
+    setAiProposal(null);
+    setAiStage(null);
+    const [settingsResult, contextResult] = await Promise.all([
+      window.editorBridge.getAiSettings(),
+      window.editorBridge.listAiContext({ projectId: project.id, pagePath: currentPage.path }),
+    ]);
+    if (settingsResult.ok) {
+      setAiSettings({ apiBaseUrl: settingsResult.apiBaseUrl, apiFormat: settingsResult.apiFormat, model: settingsResult.model, apiKeyConfigured: settingsResult.apiKeyConfigured });
+    }
+    if (contextResult.ok) {
+      setAiContextFiles(contextResult.files);
+      setAiSelectedFiles(contextResult.recommended);
+      setAiMessage(settingsResult.apiKeyConfigured ? '默认勾选当前页面及其引用的 CSS、JavaScript。' : '先填写自己的 API 地址、模型和密钥。');
+    } else {
+      setAiContextFiles([]);
+      setAiSelectedFiles([]);
+      setAiMessage(contextResult.error);
+    }
+  }
+
+  async function saveAiSettings() {
+    setAiBusy(true);
+    setAiMessage('正在安全保存 API 配置…');
+    const result = await window.editorBridge.saveAiSettings({ ...aiSettings, apiKey: aiKeyDraft });
+    setAiBusy(false);
+    if (!result.ok) { setAiMessage(result.error); return; }
+    setAiSettings((current) => ({ ...current, apiKeyConfigured: result.apiKeyConfigured }));
+    setAiKeyDraft('');
+    setAiMessage('配置已加密保存在本机。');
+  }
+
+  async function testAiConnection() {
+    setAiBusy(true);
+    setAiMessage('正在测试 API 连接…');
+    const result = await window.editorBridge.testAiConnection({ ...aiSettings, apiKey: aiKeyDraft });
+    setAiBusy(false);
+    setAiMessage(result.ok ? result.message : result.error);
+  }
+
+  async function generateAiProposal() {
+    if (!aiSelectedFiles.length) { setAiMessage('至少选择一个代码文件作为上下文。'); return; }
+    if (!aiRequest.trim()) { setAiMessage('请描述你希望 AI 编写的复杂交互逻辑。'); return; }
+    setAiBusy(true);
+    setAiMessage('AI 正在读取所选代码并生成修改方案…');
+    setAiProposal(null);
+    const result = await window.editorBridge.generateAiProposal({ projectId: project.id, pagePath: currentPage.path, request: aiRequest, contextFiles: aiSelectedFiles });
+    setAiBusy(false);
+    if (!result.ok) { setAiMessage(result.error); return; }
+    setAiProposal(result.proposal);
+    setAiMessage('方案已生成，查看文件差异后创建隔离预览。原项目尚未修改。');
+  }
+
+  async function createAiIsolatedPreview() {
+    if (!aiProposal) return;
+    setAiBusy(true);
+    setAiMessage('正在复制项目并创建隔离预览…');
+    const result = await window.editorBridge.createAiPreview({
+      projectId: project.id,
+      pagePath: currentPage.path,
+      summary: aiProposal.summary,
+      files: aiProposal.files.map(({ path, content }) => ({ path, content })),
+    });
+    setAiBusy(false);
+    if (!result.ok) { setAiMessage(result.error); return; }
+    setAiStage({ stageId: result.stageId, previewUrl: result.previewUrl });
+    setAiMessage('这是隔离副本。可以在里面点击课件验证逻辑，原项目仍未修改。');
+  }
+
+  async function applyAiProposal() {
+    if (!aiStage) return;
+    setAiBusy(true);
+    setAiMessage('正在创建修改前快照并应用方案…');
+    const result = await window.editorBridge.applyAiProposal({ projectId: project.id, stageId: aiStage.stageId });
+    setAiBusy(false);
+    if (!result.ok) { setAiMessage(result.error); return; }
+    setAiMessage(`已应用并保存到项目：${result.files.join('、')}`);
+    setAiStage(null);
+    setAiProposal(null);
+    setAiOpen(false);
+    setSelected(null);
+    setDirty(false);
+    setInteractionDirty(false);
+    setPreviewNonce((current) => current + 1);
+  }
+
+  async function discardAiIsolatedPreview() {
+    if (!aiStage) return;
+    setAiBusy(true);
+    const result = await window.editorBridge.closeAiPreview({ projectId: project.id, stageId: aiStage.stageId });
+    setAiBusy(false);
+    setAiStage(null);
+    setAiMessage(result.ok ? '隔离预览已关闭，项目文件未修改。' : result.error);
+  }
+
+  async function closeAiAssistant() {
+    if (aiStage) await window.editorBridge.closeAiPreview({ projectId: project.id, stageId: aiStage.stageId });
+    setAiStage(null);
+    setAiOpen(false);
   }
 
   function changePage(page: { path: string; url: string }) {
@@ -417,6 +562,7 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
           <button className="toolbar-button" type="button" disabled={undoStack.length === 0} onClick={undo}>撤销</button>
           <button className="toolbar-button" type="button" disabled={redoStack.length === 0} onClick={redo}>重做</button>
           <button className="toolbar-button" type="button" onClick={() => void openVersions()}>版本</button>
+          <button className="toolbar-button" type="button" disabled={hasUnsavedChanges} title={hasUnsavedChanges ? '请先保存当前手动修改' : '让 AI 编写复杂交互逻辑'} onClick={() => void openAiAssistant()}>AI 代码</button>
           <button className="toolbar-button primary-toolbar-button" type="button" disabled={!hasUnsavedChanges || !selected} onClick={() => void saveAll()}>保存</button>
           <button className="toolbar-button" type="button" onClick={closeProject}>关闭项目</button>
         </div>
@@ -439,7 +585,7 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
           <p className="panel-label">元素属性</p>
           {selected ? <>
             <div className="selected-title">{selected.id}</div>
-            <div className="selected-tag">{selected.tag}{selected.sourceType === 'dynamic' || selected.auto ? ' · 动态生成' : ' · HTML'}</div>
+            <div className="selected-tag">{selected.tag}{selected.sourceType === 'dynamic' || selected.auto ? ' · JavaScript 动态生成' : selected.sourceType === 'css' ? ' · CSS 样式' : ' · HTML'}</div>
             <label className="property-row"><span>文字内容</span><textarea value={draftText} onChange={(event) => handleTextChange(event.target.value)} /></label>
             <div className="property-grid">
               {([['fontSize', '字号'], ['width', '宽度'], ['height', '高度'], ['margin', '外边距'], ['padding', '内边距'], ['color', '颜色']] as Array<[StyleKey, string]>).map(([property, label]) => <label className="property-row" key={property}><span>{label}</span><input value={draftStyles[property]} onChange={(event) => handleStyleChange(property, event.target.value)} placeholder="保持原值" /></label>)}
@@ -459,7 +605,22 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
           </> : <p className="empty-inspector">{mode === 'edit' ? '点击预览中的元素进行编辑。' : '测试模式下可以直接操作网页。'}</p>}
         </aside>
       </section>
-      {versionOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setVersionOpen(false)}><section className="version-modal" role="dialog" aria-modal="true" aria-labelledby="version-title" onMouseDown={(event) => event.stopPropagation()}><div className="version-header"><strong id="version-title">{currentPage.path} 的保存版本</strong><button className="close-button" type="button" onClick={() => setVersionOpen(false)}>×</button></div>{versionMessage && <p className="version-empty">{versionMessage}</p>}{versions.map((version) => <div className="version-row" key={version.id}><span><strong>{new Date(version.createdAt).toLocaleString()}</strong><small>{version.reason || '保存版本'} · {version.files || '当前页面'}</small></span><div className="version-actions"><button className="toolbar-button" type="button" onClick={() => void restoreVersion(version)}>恢复</button><button className="toolbar-button danger-toolbar-button" type="button" onClick={() => void deleteVersion(version)}>删除</button></div></div>)}</section></div>}
+      {versionOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setVersionOpen(false)}><section className="version-modal" role="dialog" aria-modal="true" aria-labelledby="version-title" onMouseDown={(event) => event.stopPropagation()}><div className="version-header"><strong id="version-title">项目完整版本</strong><button className="close-button" type="button" onClick={() => setVersionOpen(false)}>×</button></div><div className="version-create-row"><input value={versionNameDraft} onChange={(event) => setVersionNameDraft(event.target.value)} placeholder={hasUnsavedChanges ? '请先保存修改，再创建版本' : '输入版本名称，例如：第一题完成'} disabled={hasUnsavedChanges} /><button className="toolbar-button" type="button" onClick={() => void createNamedVersion()} disabled={hasUnsavedChanges}>创建版本</button></div>{versionMessage && <p className="version-empty">{versionMessage}</p>}{versions.map((version) => <div className="version-row" key={version.id}><span><strong>{version.name || version.reason || '保存版本'}</strong><small>{new Date(version.createdAt).toLocaleString()} · {version.reason || '保存版本'} · {version.files || '当前页面'} · 来源页面：{version.pagePath}</small>{Boolean(version.fileList?.length) && <details><summary>查看快照文件</summary><small>{version.fileList?.join('、')}</small></details>}</span><div className="version-actions"><button className="toolbar-button" type="button" onClick={() => void restoreVersion(version)}>恢复</button><button className="toolbar-button danger-toolbar-button" type="button" onClick={() => void deleteVersion(version)}>删除</button></div></div>)}</section></div>}
+      {aiOpen && <div className="modal-backdrop ai-backdrop" role="presentation" onMouseDown={() => void closeAiAssistant()}><section className={aiStage ? 'ai-modal ai-modal-preview' : 'ai-modal'} role="dialog" aria-modal="true" aria-labelledby="ai-title" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="ai-header"><div><strong id="ai-title">AI 交互逻辑助手</strong><p>让 AI 编写逻辑，先看差异，再在隔离副本测试。</p></div><button className="close-button" type="button" aria-label="关闭" onClick={() => void closeAiAssistant()}>×</button></div>
+        {!aiStage ? <div className="ai-body">
+          <section className="ai-section"><div className="ai-section-title">API 配置</div><div className="ai-config-grid">
+            <label>API 地址<input value={aiSettings.apiBaseUrl} onChange={(event) => setAiSettings((current) => ({ ...current, apiBaseUrl: event.target.value }))} placeholder="https://api.openai.com/v1" /></label>
+            <label>接口格式<select value={aiSettings.apiFormat} onChange={(event) => setAiSettings((current) => ({ ...current, apiFormat: event.target.value as AiSettingsDraft['apiFormat'] }))}><option value="chat-completions">Chat Completions</option><option value="responses">Responses</option></select></label>
+            <label>模型名称<input value={aiSettings.model} onChange={(event) => setAiSettings((current) => ({ ...current, model: event.target.value }))} placeholder="填写服务商提供的模型名" /></label>
+            <label>API 密钥<input type="password" value={aiKeyDraft} onChange={(event) => setAiKeyDraft(event.target.value)} placeholder={aiSettings.apiKeyConfigured ? '已配置；留空表示继续使用已保存密钥' : '粘贴你的 API 密钥'} autoComplete="new-password" /></label>
+          </div><div className="ai-inline-actions"><span>{aiSettings.apiKeyConfigured ? '密钥已加密保存在本机' : '尚未配置密钥'}</span><button className="toolbar-button" type="button" disabled={aiBusy} onClick={() => void testAiConnection()}>测试连接</button><button className="toolbar-button" type="button" disabled={aiBusy} onClick={() => void saveAiSettings()}>保存配置</button></div></section>
+          <section className="ai-section"><div className="ai-section-title">发送给 AI 的代码 <small>只发送勾选文件，默认选择当前页面及其引用文件</small></div><div className="ai-context-list">{aiContextFiles.length ? aiContextFiles.map((file) => <label key={file}><input type="checkbox" checked={aiSelectedFiles.includes(file)} onChange={(event) => setAiSelectedFiles((current) => event.target.checked ? [...current, file] : current.filter((item) => item !== file))} />{file}</label>) : <span>没有可用的 HTML、CSS、JavaScript 文件</span>}</div><p className="ai-privacy-note">点击生成后，勾选的源代码会发送到上方填写的 API 服务商。</p></section>
+          <section className="ai-section"><label className="ai-request-label">描述要实现的交互<textarea value={aiRequest} onChange={(event) => setAiRequest(event.target.value)} placeholder="例如：点击三个选项之一后高亮选中项，点击下一题时判断是否选择并显示不同反馈；保留现有页面布局和其他交互。" maxLength={6000} /></label><div className="ai-inline-actions ai-generate-row"><span>{aiMessage}</span><button className="primary-toolbar-button" type="button" disabled={aiBusy || !aiSettings.apiKeyConfigured} onClick={() => void generateAiProposal()}>{aiBusy ? '处理中…' : '生成修改方案'}</button></div></section>
+          {aiProposal && <section className="ai-proposal"><div className="ai-section-title">修改说明</div><p>{aiProposal.summary}</p>{aiProposal.files.map((file) => <details className="ai-file-diff" key={file.path} open><summary>{file.path} · 修改前后对照</summary><div className="ai-diff-columns"><div><strong>修改前</strong><pre>{file.originalContent}</pre></div><div><strong>AI 修改后</strong><pre>{file.content}</pre></div></div></details>)}<div className="ai-inline-actions"><span>原项目尚未修改</span><button className="primary-toolbar-button" type="button" disabled={aiBusy} onClick={() => void createAiIsolatedPreview()}>创建隔离预览</button></div></section>}
+        </div> : <div className="ai-preview-body"><div className="ai-preview-note"><strong>隔离测试预览</strong><span>这是项目副本，可以实际点击验证；此时原项目文件还没有修改。</span></div><iframe className="ai-preview-frame" title="AI 方案隔离预览" src={aiStage.previewUrl} onLoad={(event) => event.currentTarget.contentWindow?.postMessage({ source: 'theme-unit-editor', type: 'set-mode', mode: 'test' }, '*')} sandbox="allow-scripts allow-same-origin allow-forms allow-modals" /><div className="ai-inline-actions"><span>{aiMessage}</span><button className="toolbar-button" type="button" disabled={aiBusy} onClick={() => void discardAiIsolatedPreview()}>返回差异</button><button className="primary-toolbar-button" type="button" disabled={aiBusy} onClick={() => void applyAiProposal()}>确认应用到项目</button></div></div>}
+        {!aiStage && <div className={/失败|无效|请先|至少|请选择|没有/.test(aiMessage) ? 'ai-footer error-text' : 'ai-footer'} role="status">{aiMessage}</div>}
+      </section></div>}
     </main>
   );
 }
