@@ -2,3 +2,14 @@ node_modules/
 dist/
 *.tsbuildinfo
 .vite/
+release/
+
+# Local secrets and machine-specific configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*.log

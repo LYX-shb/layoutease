@@ -6,6 +6,7 @@ const { pathToFileURL } = require('node:url');
 
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
 app.commandLine.appendSwitch('disable-http-cache');
+app.setAppUserModelId('com.themeunit.editor');
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -742,6 +743,7 @@ function markElementByHint(html, payload) {
 function upsertDynamicOverride(html, payload) {
   const selector = String(payload.selector || '').trim().replace(/[{};]/g, '');
   if (!selector) return html;
+  const viewport = ['tablet', 'mobilePortrait', 'mobileLandscape'].includes(payload.viewport) ? payload.viewport : 'desktop';
   const names = { fontSize: 'font-size', color: 'color', width: 'width', height: 'height', margin: 'margin', padding: 'padding', backgroundImage: 'background-image', transform: 'transform' };
   const declarations = Object.entries(payload.styles || {})
     .filter(([name, value]) => names[name] && value !== undefined && String(value) !== '')
@@ -751,16 +753,27 @@ function upsertDynamicOverride(html, payload) {
     .join(' ');
   if (!declarations) return html;
   const safeKey = `dynamic-${String(payload.id || 'element')}`.replace(/[^a-zA-Z0-9_-]/g, '_');
-  const media = responsiveMedia(payload.viewport || 'desktop');
+  const media = responsiveMedia(viewport);
   const rule = media ? `@media ${media} { ${selector} { ${declarations} } }` : `${selector} { ${declarations} }`;
-  const block = `<style data-editor-dynamic="${safeKey}">${rule}</style>`;
-  const existing = new RegExp(`<style\\b[^>]*data-editor-dynamic="${escapeRegExp(safeKey)}"[^>]*>[\\s\\S]*?</style>`, 'i');
-  let cleaned = html.replace(existing, '');
-  // Older builds used an auto id as the block key. If the same dynamic
-  // control receives a different auto id after reload, remove its old rule by
-  // selector too, otherwise several transform rules accumulate forever.
-  const selectorRule = new RegExp(`<style\\b[^>]*data-editor-dynamic="[^"]+"[^>]*>[\\s\\S]*?${escapeRegExp(selector)}[\\s\\S]*?<\\/style>`, 'gi');
-  cleaned = cleaned.replace(selectorRule, '');
+  const block = `<style data-editor-dynamic="${safeKey}" data-editor-viewport="${viewport}">${rule}</style>`;
+  // Keep each device rule independently editable. Older dynamic blocks did
+  // not record a viewport, so treat them as desktop rules during migration.
+  const dynamicStyle = /<style\b[^>]*data-editor-dynamic="([^"]+)"[^>]*>[\s\S]*?<\/style>/gi;
+  const cleaned = html.replace(dynamicStyle, (existingBlock, existingKey) => {
+    const openingTag = existingBlock.match(/^<style\b[^>]*>/i)?.[0] || '';
+    const viewportMatch = openingTag.match(/\bdata-editor-viewport\s*=\s*["']([^"']+)["']/i);
+    const existingRules = existingBlock.slice(openingTag.length);
+    const legacyViewport = [
+      ['tablet', '@media (min-width: 901px) and (max-width: 1200px)'],
+      ['mobilePortrait', '@media (max-width: 500px)'],
+      ['mobileLandscape', '@media (min-width: 501px) and (max-width: 900px)'],
+    ].find(([, mediaQuery]) => existingRules.includes(mediaQuery))?.[0];
+    const existingViewport = viewportMatch?.[1] || legacyViewport || 'desktop';
+    if (existingViewport !== viewport) return existingBlock;
+    const sameElement = existingKey === safeKey;
+    const sameSelector = existingRules.includes(selector);
+    return sameElement || sameSelector ? '' : existingBlock;
+  });
   if (/<\/head>/i.test(cleaned)) return cleaned.replace(/<\/head>/i, `${block}</head>`);
   if (/<\/body>/i.test(cleaned)) return cleaned.replace(/<\/body>/i, `${block}</body>`);
   return `${cleaned}${block}`;
@@ -831,6 +844,7 @@ function createWindow() {
     minWidth: 960,
     minHeight: 640,
     backgroundColor: '#f5f6f8',
+    icon: path.join(__dirname, '..', 'build', 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

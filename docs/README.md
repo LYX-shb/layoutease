@@ -15,6 +15,7 @@
 | [07-progress-and-acceptance.md](./07-progress-and-acceptance.md) | 当前进度、可验收功能、已知限制和下一步 | 每次查看项目状态时 |
 | [08-delivery-acceptance-standard.md](./08-delivery-acceptance-standard.md) | 第一版交付边界、必须通过的验收操作和不合格条件 | 判断一个版本能否交付时 |
 | [09-version-2-scope-and-acceptance.md](./09-version-2-scope-and-acceptance.md) | 第二版功能范围、阶段顺序和交付标准 | 第一版验收后规划第二版时 |
+| [11-windows-installer.md](./11-windows-installer.md) | Windows 安装包的构建方式、产物位置和发布限制 | 构建、验证或分发桌面安装包时 |
 
 ## 当前执行原则
 

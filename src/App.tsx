@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { pushHistory, redoHistory, undoHistory } from './history.js';
 
 type Viewport = 'desktop' | 'tablet' | 'mobilePortrait' | 'mobileLandscape';
 type StyleKey = 'fontSize' | 'color' | 'width' | 'height' | 'margin' | 'padding' | 'backgroundImage' | 'transform';
@@ -194,7 +195,7 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
       }
       if (event.data.type === 'changed') {
         const change: EditorChange = { id: event.data.id, kind: 'style', property: event.data.property, before: event.data.before, after: event.data.after };
-        setUndoStack((current) => [...current.slice(-99), change]);
+        setUndoStack((current) => pushHistory({ undo: current, redo: [] }, change).undo);
         setRedoStack([]);
         setDirty(true);
         changedStyleKeysRef.current.add(event.data.property as StyleKey);
@@ -215,8 +216,9 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
 
   function addChange(change: EditorChange) {
     if (change.before === change.after) return;
-    setUndoStack((current) => [...current.slice(-99), change]);
-    setRedoStack([]);
+    const nextHistory = pushHistory({ undo: undoStack, redo: redoStack }, change);
+    setUndoStack(nextHistory.undo);
+    setRedoStack(nextHistory.redo);
     setDirty(true);
   }
 
@@ -234,20 +236,22 @@ function EditorView({ project, onClose }: { project: Extract<OpenProjectResult, 
   }
 
   function undo() {
-    const change = undoStack[undoStack.length - 1];
+    const transition = undoHistory({ undo: undoStack, redo: redoStack });
+    const change = transition.change;
     if (!change) return;
     applyChange(change, change.before);
-    setUndoStack((current) => current.slice(0, -1));
-    setRedoStack((current) => [...current.slice(-99), change]);
+    setUndoStack(transition.history.undo);
+    setRedoStack(transition.history.redo);
     setDirty(true);
   }
 
   function redo() {
-    const change = redoStack[redoStack.length - 1];
+    const transition = redoHistory({ undo: undoStack, redo: redoStack });
+    const change = transition.change;
     if (!change) return;
     applyChange(change, change.after);
-    setRedoStack((current) => current.slice(0, -1));
-    setUndoStack((current) => [...current.slice(-99), change]);
+    setRedoStack(transition.history.redo);
+    setUndoStack(transition.history.undo);
     setDirty(true);
   }
 

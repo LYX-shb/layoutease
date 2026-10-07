@@ -9,19 +9,61 @@
     "dev": "node scripts/dev.cjs",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test",
+    "package:win": "npm run build && electron-builder --win nsis --x64"
   },
-  "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "electron": "latest",
-    "react": "latest",
-    "react-dom": "latest"
+  "dependencies": {},
+  "build": {
+    "appId": "com.themeunit.editor",
+    "productName": "主题单元编辑器",
+    "asar": true,
+    "electronDist": "node_modules/electron/dist",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "build/icon.ico",
+      "package.json",
+      "!docs/**/*",
+      "!tests/**/*",
+      "!examples/**/*",
+      "!scripts/**/*",
+      "!src/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Theme-Unit-Editor-${version}-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "主题单元编辑器"
+    }
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "concurrently": "latest",
     "cross-env": "latest",
+    "electron": "latest",
+    "electron-builder": "^26.15.3",
+    "react": "latest",
+    "react-dom": "latest",
     "typescript": "latest",
     "vite": "latest",
     "wait-on": "latest"

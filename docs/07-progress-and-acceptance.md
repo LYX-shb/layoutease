@@ -1,14 +1,24 @@
 # 项目进度与验收记录
 
-更新时间：2026-10-06
+更新时间：2026-10-07
+
+2026-10-07 Windows 安装包：`npm run package:win` 已成功生成 x64 NSIS 安装程序 `release/Theme-Unit-Editor-0.1.0-Setup.exe`（111,413,320 字节）。包内 `app.asar` 已检查，包含前端入口、Electron 主进程和 preload，且入口与本次生产构建一致；`npm test` 7 项通过、`npm run typecheck` 通过。尝试从 `D:\页面编辑器\release` 启动打包应用时，被当前 Codex 沙箱的 Windows AppContainer ACL 拦截，因此尚未确认安装后的桌面界面能否启动。安装包目前未做代码签名，Windows 可能显示发布者未知提示。详细说明见 [11-windows-installer.md](./11-windows-installer.md)。
 
 ## 当前状态
 
 项目已经从空仓库建立了 Electron + React + TypeScript + Vite 的桌面应用。运行 `npm run dev` 会先启动 Vite，再把实际端口传给 Electron；即使默认端口被占用，预览地址也会保持一致。在当前 Codex 沙箱里，Electron 启动受到 `node_modules/electron/dist` ACL 限制，尚未完成人工窗口验收。
 
-当前完成度：阶段 0、阶段 1 和 MVP-Manual 基础编辑已完成；第二版 A/B/C/D 第一版功能闭环已在主工作区实现，正在等待解决本机 Electron 启动 ACL 问题并完成真实 Windows 窗口与项目验收。第二版没有通过 [09-version-2-scope-and-acceptance.md](./09-version-2-scope-and-acceptance.md) 的正式验收前，不标记为最终交付。
+当前完成度：阶段 0、阶段 1 和 MVP-Manual 基础编辑已完成；第二版 A/B/C/D 第一版功能闭环已在主工作区实现。第二版自动检查和浏览器磁盘保存抽查通过；10 步撤销/重做栈逻辑已有单元测试，但尚未在真实窗口确认工具栏操作和预览同步。正式交付仍需完成 Windows 桌面 GUI 验收、Vue/React/原生 JS 各一个动态元素案例、交互编辑及版本恢复的窗口验收，以及 AI 真实 API 的拒绝/确认应用/失败回滚测试。第二版没有通过 [09-version-2-scope-and-acceptance.md](./09-version-2-scope-and-acceptance.md) 的正式验收前，不标记为最终交付。
 
 2026-10-06 自测结果：Electron 主进程/preload 语法检查、`npm run typecheck`、`npm run build`、`git diff --check` 均通过。临时项目端到端模拟通过：交互规则保存/读取/清除、API 密钥本机加密、上下文筛选、AI 方案生成、隔离副本运行前原项目不变、确认应用、完整项目恢复和命名版本列表。模拟使用本地假 API，不代表真实服务商兼容性。Windows Electron 窗口启动受本机 `node_modules\\electron\\dist` ACL 限制；Vite 前端可运行，尚未完成真实鼠标验收。
+
+2026-10-07 可重复验收：`npm test` 共 7 项测试通过。Electron IPC 模拟覆盖脚本生成的图片按钮连续移动/换图保存、旧动态规则迁移、电脑/平板/手机竖屏/手机横屏四种视口规则分别保留、10 次交互规则修改与读回、3 次完整快照恢复（HTML、CSS、JS、素材和删除文件），以及 AI 隔离预览拒绝、确认应用和模拟写入失败后的回滚。撤销/重做栈已拆为编辑器实际使用的纯逻辑并测试 10 次撤销后重做，但还没有在窗口确认每次变化确实同步到预览。运行后自动清理临时项目，不访问或修改 `D:\\test`；AI 使用本地假 API，不代表真实服务商兼容性。
+
+2026-10-07 预览要求确认：预览必须是实时运行的当前网页。拖动、文字/属性编辑、素材替换和撤销/重做应立即更新预览；这些改动在保存前属于未保存状态，保存成功并刷新后仍须保留。此项是已确定的产品要求，未完成部分是桌面窗口中的实际操作验收，不是等待用户决定需求。
+
+2026-10-06 浏览器保存核验：只读打开用户项目 `D:\\test\\index.html`，页面可正常显示；文件中已存在声音按钮位置规则 `translate(-160px, 64px)` 和动态按钮素材补丁，浏览器呈现位置与保存规则一致。本次只核实磁盘文件和浏览器效果，没有改写 `D:\\test`；这能证明该次修改持久化，但不等于编辑器完整 GUI 验收。
+
+2026-10-06 桌面启动复验：沙箱内运行 `npm run dev` 时 Vite 正常自动选择空闲端口，Electron 因 Windows ACL 检查退出。用户授权后，尝试给 Electron 运行目录和 `icudtl.dat` 增加 AppContainer 读取权限、给上级目录增加仅穿越权限；`D:\\` 根目录拒绝修改，其他目录授权后 Electron 仍报同一 ACL 错误。已撤回本次添加的所有 ACL 条目，没有关闭 Chromium 沙箱。沙箱外临时启动会与已运行实例争用 GPU 缓存；临时进程已关闭。完整 Windows 桌面操作验收仍未完成。
 
 ## 已完成内容
 
@@ -42,6 +52,7 @@
 ## 当前版本如何验收
 
 1. 在项目根目录运行 `npm run dev`。
+   文件级自动化回归可以先运行 `npm test`；通过后再进行下面的桌面手工验收。
 2. 点击“打开主题单元”。
 3. 选择 `examples/theme-unit` 文件夹。
 4. 在网页预览中按住标题或按钮拖动。
@@ -72,7 +83,7 @@
 
 ### 当前阶段：完成第二版正式验收
 
-当前 Codex 沙箱无法打开 Electron 窗口；前端构建、端口自动选择和临时项目 IPC 模拟已通过。下一步用用户桌面环境运行 `npm run dev`，按 [09-version-2-scope-and-acceptance.md](./09-version-2-scope-and-acceptance.md) 完成动态元素、多页面交互、撤销/重做、版本恢复和真实 API 测试。通过前继续修复，不进入新功能范围。
+`npm run typecheck`、`npm run build`、开发服务器空闲端口启动、临时项目 IPC 模拟和 `D:\\test` 浏览器保存抽查已通过。当前会话不能通过已启用的 UI 工具操作 Electron 原生窗口；Electron 沙箱启动仍被 ACL 检查阻断。本次 ACL 调整已经撤回，没有遗留新权限，也没有关闭沙箱。下一步需要在能操作 Electron 原生窗口的桌面会话中，依 [09-version-2-scope-and-acceptance.md](./09-version-2-scope-and-acceptance.md) 完成各框架动态元素、多页面交互、撤销/重做、版本恢复和真实 API 验收。通过前继续修复，不进入新功能范围。
 
 ## 后续汇报规则
 
