@@ -1,7 +1,7 @@
 {
   "name": "interactive-learning-editor",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.1.7",
   "private": true,
   "description": "Windows desktop editor for interactive learning web units",
   "main": "electron/main.cjs",
@@ -13,11 +13,11 @@
     "test": "node --test",
     "package:win": "npm run build && electron-builder --win nsis --x64"
   },
-  "dependencies": {},
   "build": {
     "appId": "com.themeunit.editor",
     "productName": "主题单元编辑器",
     "asar": true,
+    "npmRebuild": false,
     "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "release",
@@ -55,13 +55,14 @@
     }
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
     "concurrently": "latest",
     "cross-env": "latest",
     "electron": "latest",
     "electron-builder": "^26.15.3",
+    "jsdom": "^30.1.3",
     "react": "latest",
     "react-dom": "latest",
     "typescript": "latest",

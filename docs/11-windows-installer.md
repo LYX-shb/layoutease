@@ -1,5 +1,7 @@
 # Windows 安装包
 
+当前版本为 0.1.7（2026-10-26），修复 SVG 场景整页选中和选框拦截点击，支持独立素材的位置与尺寸调整，并识别明确提供的 Figma 场景。当前安装包为 `release/Theme-Unit-Editor-0.1.7-Setup.exe`，通过 [GitHub Releases](https://github.com/LYX-shb/theme-unit-editor/releases/latest) 分发。功能与检查记录见 [SVG 内部素材选择修复](./32-svg-object-selection.md)。下文包含早期版本的安装验证记录。
+
 ## 构建
 
 在 Windows 项目根目录安装 npm 依赖后运行：
@@ -13,7 +15,7 @@ npm run package:win
 
 ## 产物与使用
 
-- 安装程序：`release/Theme-Unit-Editor-0.1.0-Setup.exe`
+- 安装程序：`release/Theme-Unit-Editor-0.1.7-Setup.exe`
 - 解包后的应用目录：`release/win-unpacked/`
 - 安装程序允许选择安装位置，并创建开始菜单和桌面快捷方式。
 - 安装并打开后，选择包含 `index.html` 的主题单元项目文件夹。
@@ -23,5 +25,5 @@ npm run package:win
 ## 已知限制
 
 - 当前安装程序没有代码签名证书。Windows SmartScreen 或 Defender 可能提示未知发布者；应只从可信来源分发。
-- 成功生成安装文件和检查 ASAR 内容不等同于安装后的桌面 GUI 验收。本次从 `D:\页面编辑器\release` 启动时，当前 Codex 沙箱的 Windows AppContainer ACL 阻止 Electron 读取该目录；这不能证明安装后必然失败，也不能代替真实启动验收。正式交付前还需要在 Windows 桌面上安装并检查启动、打开项目、编辑、保存和重启后的数据持久化。
-- 版本号目前为 `0.1.0`，发布新版本前要在 `package.json` 更新版本号并重新构建。
+- 0.1.3 已通过安装程序替换当前用户的 0.1.2，安装后的 ASAR 与构建产物哈希一致，桌面窗口启动并正常响应。打开项目、编辑、保存和重启后的数据持久化仍需在目标项目上验收。
+- 版本号目前为 `0.1.7`；后续发布前要同步更新 `package.json` 和 `package-lock.json` 中的项目版本号并重新构建。

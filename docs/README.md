@@ -16,8 +16,22 @@
 | [08-delivery-acceptance-standard.md](./08-delivery-acceptance-standard.md) | 第一版交付边界、必须通过的验收操作和不合格条件 | 判断一个版本能否交付时 |
 | [09-version-2-scope-and-acceptance.md](./09-version-2-scope-and-acceptance.md) | 第二版功能范围、阶段顺序和交付标准 | 第一版验收后规划第二版时 |
 | [11-windows-installer.md](./11-windows-installer.md) | Windows 安装包的构建方式、产物位置和发布限制 | 构建、验证或分发桌面安装包时 |
+| [12-editing-usability-requirements.md](./12-editing-usability-requirements.md) | 字号编辑、拖动确认、元素缩放、应用内文件切换需求（已确认） | 用户确认本轮需求及后续实施验收时 |
+| [13-project-picker-and-theme.md](./13-project-picker-and-theme.md) | 启动直达编辑、自动发现与手动导入项目、黑白主题 | 查看项目选择与外观设置行为及验收记录时 |
+| [14-device-preview.md](./14-device-preview.md) | 华为 Pura 70 Pro+ 参考预设、自定义宽高与预览校准 | 查看尺寸来源、保存范围和验证记录时 |
+| [15-self-check-2026-10-12.md](./15-self-check-2026-10-12.md) | 自查问题、修复、回归结果与剩余限制 | 查看当前可靠性和安装包差异时 |
+| [16-dynamic-feedback-save.md](./16-dynamic-feedback-save.md) | 动态答题提示保存、旧规则修复与服务器更新 | 遇到编辑位置保存后恢复、提示重新生成时 |
+| [18-edit-scope.md](./18-edit-scope.md) | 素材修改的当前画面、指定画面、全部画面范围 | 需要跨交互状态保留素材调整时 |
+| [19-image-resizing.md](./19-image-resizing.md) | 自由调整宽高、锁定比例和恢复原图比例 | 图片拉伸变形或需要独立修改宽高时 |
+| [20-visibility-and-page-sharing.md](./20-visibility-and-page-sharing.md) | 保持原状态、出现范围、跨网页图片应用与撤销 | 希望素材在指定状态或其他 HTML 中出现时 |
+| [21-phone-scope-compatibility.md](./21-phone-scope-compatibility.md) | P70 预览、手机通用范围和旧内核 CSS 回退 | 编辑器与真机网页显示不一致时 |
 
 ## 当前执行原则
+
+最新功能：[点击后定格与编辑暂停](./29-freeze-editing.md)（0.1.4）。
+修复记录：[测试中意外重置](./30-test-progress-preservation.md)（0.1.5）。
+当前定格方式：[按下立即定格](./31-immediate-freeze.md)（0.1.6）。
+当前版本：[SVG 内部素材选择修复](./32-svg-object-selection.md)（0.1.7）。
 
 1. 先完成单个主题单元的稳定编辑闭环，再扩展多页面、基础交互和 AI。
 2. 第一版的主价值是快速微调 HTML/CSS 页面；AI 用于复杂 JavaScript 逻辑，不替代简单拖拽。

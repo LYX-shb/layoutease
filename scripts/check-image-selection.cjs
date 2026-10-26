@@ -1,0 +1,218 @@
+// Run with Electron after building; course files are copied to a temporary project.
+const electron = require('electron');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const assert = require('node:assert/strict');
+const Module = require('node:module');
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'editor-image-selection-'));
+const project = path.join(root, 'project');
+const course = process.argv.find(arg => arg.startsWith('--course='))?.slice(9);
+if (course) fs.cpSync(course, project, { recursive: true });
+else fs.mkdirSync(project);
+const image = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="120" height="80"%3E%3Crect width="120" height="80" fill="orange"/%3E%3C/svg%3E';
+const fixture = `<!doctype html><html><head><style>
+body{margin:20px}.case{position:relative;display:inline-block;width:140px;height:100px;margin:10px;vertical-align:top}
+.art{width:120px;height:80px;pointer-events:none}.cover{position:absolute;inset:0;background:transparent;border:0;padding:0}
+.background{width:120px;height:80px;background:linear-gradient(orange,red);pointer-events:none}
+.rotated{transform:rotate(30deg)}.hidden{visibility:hidden}.clipped{clip-path:inset(0 50% 0 0)}
+.behind{position:absolute;inset:0}.opaque{position:absolute;inset:0;background:white}
+</style></head><body>
+<div class="case"><img id="covered-art" class="art" src='${image}'><button id="hit-area" class="cover" aria-label="交互热区"></button></div>
+<div class="case"><div id="css-art" class="background"></div><button class="cover" aria-label="背景热区"></button></div>
+<div class="case"><button id="multi-button" class="cover"><img id="first-icon" style="position:absolute;left:0;top:0;width:40px;height:40px;pointer-events:none" src='${image}'><img id="second-icon" style="position:absolute;right:0;bottom:0;width:40px;height:40px;pointer-events:none" src='${image}'></button></div>
+<div class="case"><img id="text-backdrop" class="art" src='${image}'><button class="cover"><span id="visible-text">下一题</span></button></div>
+<div class="case"><img id="hidden-art" class="art hidden" src='${image}'><button id="visible-button" class="cover">可见按钮</button></div>
+<div class="case"><img id="occluded-art" class="art" src='${image}'><div id="opaque-cover" class="opaque">前景内容</div></div>
+<div class="case"><svg id="vector-art" width="120" height="80"><rect id="vector-shape" width="120" height="80" fill="orange"/></svg></div>
+<div class="case"><img id="rotated-art" class="art rotated" src='${image}'></div>
+<div class="case"><img id="clipped-art" class="art clipped" src='${image}'><button id="clipped-cover" class="cover" aria-label="裁切外区域"></button></div>
+</body></html>`;
+fs.writeFileSync(path.join(project, 'selection-fixture.html'), fixture);
+if (!course) fs.writeFileSync(path.join(project, 'index.html'), fixture);
+electron.app.setPath('userData', path.join(root, 'profile'));
+delete process.env.VITE_DEV_SERVER_URL;
+let win;
+const nativeHandle = electron.ipcMain.handle.bind(electron.ipcMain);
+const replacement = {
+  ...electron,
+  BrowserWindow: class extends electron.BrowserWindow {
+    constructor(options) { super({ ...options, width: 1600, height: 1000, show: false, webPreferences: { ...options.webPreferences, backgroundThrottling: false } }); win = this; }
+  },
+  dialog: { ...electron.dialog, showOpenDialog: async () => ({ canceled: false, filePaths: [project] }) },
+  ipcMain: { handle(name, handler) { nativeHandle(name, name === 'project:catalog' ? async () => ({ ok: true, items: [], lastKey: '', limited: false }) : handler); } },
+};
+const originalLoad = Module._load;
+Module._load = function(name, parent, main) { return name === 'electron' ? replacement : originalLoad.call(this, name, parent, main); };
+try { require('../electron/main.cjs'); } finally { Module._load = originalLoad; }
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const ui = code => win.webContents.executeJavaScript(code);
+function frame() { return win.webContents.mainFrame.frames.find(item => item.url.startsWith('editor-project://')); }
+const page = code => frame().executeJavaScript(code);
+async function until(check, label) {
+  const end = Date.now() + 10000;
+  while (Date.now() < end) { try { if (await Promise.race([check(), delay(500).then(() => false)])) return; } catch {} await delay(30); }
+  throw new Error('Timed out: ' + label);
+}
+async function click(label) { await ui(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent===${JSON.stringify(label)}||b.getAttribute('aria-label')===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Unavailable '+${JSON.stringify(label)});b.click()})()`); }
+async function prepare() {
+  await page(`window.__selection=null;window.__pointerLog=[];for(const type of ['pointerdown','pointerup','pointercancel','lostpointercapture'])document.addEventListener(type,e=>window.__pointerLog.push({type,id:e.pointerId,x:e.clientX,y:e.clientY,target:e.target.id||e.target.localName}),true);`);
+  await ui(`window.__selection=null;if(!window.__watchSelection){window.__watchSelection=true;window.addEventListener('message',e=>{if(e.data?.source==='theme-unit-editor'&&e.data.type==='selected')window.__selection=e.data})}`);
+}
+async function pick(selector, ratioX = .5, ratioY = .5, altKey = false, native = false) {
+  await ui(`window.__selection=null`);
+  const hit = await page(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});const r=e.getBoundingClientRect();const x=r.left+r.width*${ratioX},y=r.top+r.height*${ratioY};const hit=document.elementFromPoint(x,y);if(!${native}){hit?.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:1,clientX:x,clientY:y,altKey:${altKey}}));document.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,button:0,pointerId:1,clientX:x,clientY:y,altKey:${altKey}}))}return {hit:hit?.id||hit?.className, x,y}})()`);
+  if (native) {
+    await ui(`window.__selection=null`);
+    win.webContents.focus();
+    const point = await ui(`(()=>{const r=document.querySelector('iframe').getBoundingClientRect();return {x:Math.round(r.left+${hit.x}*r.width/1440),y:Math.round(r.top+${hit.y}*r.height/900)}})()`);
+    if (!win.webContents.debugger.isAttached()) win.webContents.debugger.attach('1.3');
+    await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point });
+    await delay(170);
+    await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
+    await delay(50);
+    await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
+  }
+  await delay(40);
+  const selection = await ui(`window.__selection`);
+  return { ...hit, selector: selection?.selector, tag: selection?.tag, src: selection?.src, background: selection?.styles?.backgroundImage, ...(native ? {events:await page('window.__pointerLog.slice(-5)')} : {}) };
+}
+const results = [];
+async function check(name, selector, expected, x = .5, y = .5, altKey = false, native = false) {
+  const actual = await pick(selector, x, y, altKey, native);
+  const pass = Boolean(actual.selector) && await page(`document.querySelector(${JSON.stringify(actual.selector)})===document.querySelector(${JSON.stringify(expected)})`);
+  results.push({ name, pass, expected, actual });
+  console.log((pass ? 'PASS ' : 'FAIL ') + name + ': ' + JSON.stringify(actual));
+}
+electron.app.whenReady().then(async () => {
+  const timeout = setTimeout(() => electron.app.exit(1), 90000);
+  try {
+    await until(() => ui(`!!document.querySelector('.empty-workspace')`), 'editor ready');
+    win.show(); win.focus();
+    await click('浏览文件夹');
+    await until(() => frame() && page(`document.readyState==='complete'`), 'project loaded');
+    await ui(`(()=>{const s=document.querySelector('[aria-label="预览设备"]');Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(s,'desktop');s.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+    await until(() => frame() && page(`innerWidth===1440 && document.readyState==='complete'`), 'desktop viewport');
+    await delay(100);
+    await prepare();
+    if (course && await page(`!!window.FIGMA?.scenes`)) {
+      await until(() => page(`document.querySelector('main').dataset.phase==='figma-scene-1'`), 'authored Figma scene recognized');
+      await page(`document.querySelector('#hand')?.getAnimations().forEach(animation=>animation.finish())`);
+      await check('Figma biscuit selects its own node below transparent hit area', '#scene [data-node="1:523"]', '#scene [data-node="1:523"]');
+      await check('Figma candy selects a different node with an ordinary click', '#scene [data-node="1:521"]', '#scene [data-node="1:521"]');
+      await check('native mouse selects the biscuit artwork', '#scene [data-node="1:523"]', '#scene [data-node="1:523"]', .5, .5, false, true);
+      // Selecting the old full-scene root must no longer trap later clicks.
+      // Use the actual artwork selection, then explicitly select the root via a
+      // click in the empty SVG area, just as the reported failure began.
+      await pick('#scene > svg', .98, .95);
+      await check('single click escapes a full-scene selection frame', '#scene [data-node="1:523"]', '#scene [data-node="1:523"]');
+      await page(`window.__start=document.querySelector('#scene [data-node="1:523"]').getBoundingClientRect().toJSON();const r=window.__start;const x=r.x+r.width/2,y=r.y+r.height/2;document.elementFromPoint(x,y).dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:7,clientX:x,clientY:y}));document.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:7,clientX:x+40,clientY:y+25}));document.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:7,clientX:x+40,clientY:y+25}));`);
+      const moved = await page(`(()=>{const r=document.querySelector('#scene [data-node="1:523"]').getBoundingClientRect();return {x:r.x-window.__start.x,y:r.y-window.__start.y}})()`);
+      assert.ok(Math.abs(moved.x-40)<1 && Math.abs(moved.y-25)<1, JSON.stringify(moved));
+      results.push({name:'SVG object drag follows pointer through stage transforms',pass:true});
+      await page(`(()=>{const e=document.querySelector('#scene [data-node="1:523"]'),m=e.parentElement.getScreenCTM(),delta=(500-e.getBBox().width)*m.a;const handle=document.querySelector('[data-resize-direction="e"]'),r=handle.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;handle.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:8,clientX:x,clientY:y}));document.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:8,clientX:x+delta,clientY:y}));document.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:8,clientX:x+delta,clientY:y}))})()`);
+      await until(() => page(`Math.abs(parseFloat(getComputedStyle(document.querySelector('#scene [data-node="1:523"]')).width)-500)<.1`), 'SVG size edit applied');
+      const scale = await page(`getComputedStyle(document.querySelector('#scene [data-node="1:523"]')).scale`);
+      assert.ok(parseFloat(scale)>1.2, 'SVG width must scale the painted object: '+scale);
+      await until(() => ui(`!!document.querySelector('.save-state.dirty')`), 'SVG edit dirty');
+      await click('保存');
+      await until(() => ui(`!document.querySelector('.save-state.dirty')`), 'SVG edits saved');
+      const saved = fs.readFileSync(path.join(project,'index.html'),'utf8');
+      assert.ok(saved.includes('data-node=\\"1:523\\"'), 'persist using authored node identity');
+      await click('刷新预览');
+      await until(() => page(`document.readyState==='complete'&&getComputedStyle(document.querySelector('#scene [data-node="1:523"]')).width==='500px'`), 'SVG edit survives reload');
+      assert.ok(await page(`parseFloat(getComputedStyle(document.querySelector('#scene [data-node="1:523"]')).scale)>1.2`));
+      results.push({name:'SVG object dimensions and position persist through save and reload',pass:true});
+      await page(`document.querySelector('#scene').innerHTML=window.FIGMA.scenes[1]`);
+      await until(() => page(`document.querySelector('main').dataset.phase==='figma-scene-2'`), 'next authored scene recognized');
+      assert.ok(await page(`![...document.querySelectorAll('#scene [data-node]')].some(element=>getComputedStyle(element).width==='500px')`), 'a current-scene edit does not leak into the next scene');
+      await page(`document.querySelector('#scene').innerHTML=window.FIGMA.scenes[0]`);
+      await until(() => page(`document.querySelector('main').dataset.phase==='figma-scene-1'&&getComputedStyle(document.querySelector('#scene [data-node="1:523"]')).width==='500px'`), 'returning scene restores its saved edit');
+      results.push({name:'SVG edits remain isolated to their authored scene',pass:true});
+      await page(`document.querySelector('#hand')?.getAnimations().forEach(animation=>animation.finish())`);
+      await check('saved SVG object remains independently selectable', '#scene [data-node="1:523"]', '#scene [data-node="1:523"]', .15, .15);
+      await delay(100);
+      assert.ok(await page(`!!document.querySelector('[data-selection-frame]')`), 'SVG object selection remains available after rendering');
+      const directory = path.resolve(__dirname, '../release/image-selection-check');
+      fs.mkdirSync(directory, {recursive:true});
+      fs.writeFileSync(path.join(directory,'svg-course.png'), (await win.webContents.capturePage()).toPNG());
+    } else if (course) {
+      await check('board artwork under transparent fu hit area', '[data-fu="0"]', '.board-art');
+      await check('native mouse over hover-highlighted hit area', '[data-fu="0"]', '.board-art', .5, .5, false, true);
+      await page(`document.querySelector('[data-fu="0"]').style.backgroundColor='rgba(255,190,22,0.09)'`);
+      await check('translucent interaction highlight does not mask image', '[data-fu="0"]', '.board-art');
+      await page(`document.querySelector('[data-fu="0"]').style.removeProperty('background-color')`);
+      await page(`fuTargets.forEach(pasteFu)`);
+      await delay(320);
+      await page(`document.getAnimations().forEach(animation=>animation.finish())`);
+      await check('dynamic fu tile under disabled hit area', '.fu-tile', '.fu-tile');
+      await check('number image inside interactive piece', '[data-piece="12"] img', '[data-piece="12"] img');
+      await check('slot frame under empty holder', '[data-slot="0"] .slot-frame', '[data-slot="0"] .slot-frame');
+      await page(`assignValue(answerSlots[0],'12')`);
+      await check('dynamic slot value above frame', '[data-slot="0"] .slot-value img', '[data-slot="0"] .slot-value img');
+      await check('Alt click reaches slot frame below dynamic value', '[data-slot="0"] .slot-value img', '[data-slot="0"] .slot-frame', .5, .5, true);
+      await check('feedback image in pointer-disabled section', '#feedback-image', '#feedback-image');
+      await check('equals sign in pointer-disabled section', '.equals-sign', '.equals-sign');
+      await pick('.fu-tile');
+      await until(() => ui(`document.querySelector('.selected-tag')?.textContent.startsWith('img')`), 'dynamic image inspector');
+      await ui(`(()=>{const row=[...document.querySelectorAll('.property-row')].find(e=>e.querySelector('span')?.textContent==='宽度');const input=row.querySelector('input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'130');input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+      await delay(40);
+      await ui(`[...document.querySelectorAll('.property-row')].find(e=>e.querySelector('span')?.textContent==='宽度').querySelector('input').dispatchEvent(new FocusEvent('focusout',{bubbles:true}))`);
+      await until(() => ui(`!!document.querySelector('.save-state.dirty')`), 'image edit is dirty');
+      await click('保存');
+      await until(() => ui(`!document.querySelector('.save-state.dirty')`), 'image saved');
+      assert.match(fs.readFileSync(path.join(project,'index.html'),'utf8'), /width:\s*130px/);
+      await click('刷新预览');
+      await until(() => page(`document.readyState==='complete'&&!document.querySelector('.fu-tile')`), 'course reloaded');
+      await page(`fuTargets.forEach(pasteFu);document.getAnimations().forEach(animation=>animation.finish())`);
+      await until(() => page(`getComputedStyle(document.querySelector('.fu-tile')).width==='130px'`), 'dynamic image edit survives recreation');
+      results.push({ name: 'dynamic image resize saves and survives reload', pass: true });
+      console.log('PASS dynamic image resize saves and survives reload');
+    }
+    if (course) {
+      await ui(`[...document.querySelectorAll('.page-item')].find(e=>e.textContent.includes('selection-fixture.html')).click()`);
+      await until(() => frame()?.url.includes('selection-fixture.html') && page(`!!document.querySelector('#covered-art')&&document.readyState==='complete'`), 'fixture loaded');
+      await delay(200);
+      await until(() => page(`document.querySelector('#covered-art')?.getBoundingClientRect().width>0`), 'fixture has rendered bounds');
+    }
+    await check('transparent overlay yields visible image', '#covered-art', '#covered-art');
+    await check('CSS image with pointer-events none', '#css-art', '#css-art');
+    await check('second nested image selected rather than first', '#second-icon', '#second-icon');
+    await check('text button remains editable', '#visible-text', '.case:nth-child(4) > button');
+    await check('hidden image is excluded', '#visible-button', '#visible-button');
+    await check('opaque foreground is respected', '#opaque-cover', '#opaque-cover');
+    await check('SVG descendants select SVG root', '#vector-shape', '#vector-art');
+    await check('rotated image is selectable', '#rotated-art', '#rotated-art');
+    await check('clipped image outside painted area excluded', '#clipped-art', '#clipped-cover', .85);
+    assert.equal(await page(`document.querySelector('#covered-art').style.pointerEvents`), '', 'hit testing never changes authored inline styles');
+    await ui(`window.__targetSelection=null;window.addEventListener('message',e=>{if(e.data?.type==='target-selected')window.__targetSelection=e.data.selector});document.querySelector('iframe').contentWindow.postMessage({source:'theme-unit-editor',type:'set-interaction-target',enabled:true},'*')`);
+    await delay(40);
+    await pick('#hit-area');
+    await until(() => ui(`window.__targetSelection==='button#hit-area'`), 'interaction picking retains actual control');
+    results.push({ name: 'interaction target picking retains original control', pass: true });
+    // Test mode must keep the original hit areas and native interactions.
+    await click('测试');
+    await delay(60);
+    if (await ui(`!!document.querySelector('[aria-label="未保存修改"]')`)) await click('放弃修改并切换');
+    await until(() => ui(`document.querySelector('.mode-switcher .active')?.textContent==='测试'`), 'test mode');
+    await until(() => frame() && page(`document.readyState==='complete'&&!!document.querySelector('#hit-area')`), 'test-mode preview loaded');
+    await delay(60);
+    await page(`window.__nativeClicks=0;document.querySelector('#hit-area').addEventListener('click',()=>window.__nativeClicks++);document.querySelector('#hit-area').click()`);
+    assert.equal(await page(`window.__nativeClicks`), 1);
+    results.push({ name: 'test mode preserves native page clicks', pass: true });
+    const directory = path.resolve(__dirname, '../release/image-selection-check');
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, 'result.json'), JSON.stringify({ course, project, results }, null, 2));
+    if (!process.argv.includes('--diagnose')) assert(results.every(result => result.pass), 'image hit tests must all pass');
+    console.log(`${results.filter(result => result.pass).length}/${results.length} image selection checks passed`);
+    clearTimeout(timeout); win.destroy(); electron.app.exit(0);
+  } catch (error) {
+    console.error(error);
+    if (win && !win.isDestroyed()) {
+      fs.writeFileSync(path.resolve(__dirname, '../release/svg-selection-failure.png'), (await win.webContents.capturePage()).toPNG());
+      console.error('Inspector:', await ui(`document.querySelector('.selected-tag')?.textContent`));
+      console.error('SVG state:', await page(`JSON.stringify({phase:document.querySelector('main')?.dataset.phase,chosen:document.querySelector('#scene [data-node="1:523"]')?.getAttribute('style'),layout:window.__editorLayoutRuntime.snapshot(),selection:document.querySelector('[data-selection-frame]')?.outerHTML})`));
+    }
+    clearTimeout(timeout); if(win&&!win.isDestroyed())win.destroy(); electron.app.exit(1);
+  }
+});

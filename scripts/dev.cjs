@@ -17,9 +17,11 @@ async function main() {
   const devUrl = `http://127.0.0.1:${address.port}`;
   server.printUrls();
   console.log(`Electron 预览地址：${devUrl}`);
+  const electronEnvironment = { ...process.env, VITE_DEV_SERVER_URL: devUrl };
+  delete electronEnvironment.ELECTRON_RUN_AS_NODE;
   const electron = spawn(electronExecutable, ['.'], {
     stdio: 'inherit',
-    env: { ...process.env, VITE_DEV_SERVER_URL: devUrl },
+    env: electronEnvironment,
   });
 
   let closing = false;

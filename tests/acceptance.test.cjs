@@ -8,7 +8,9 @@ const { after, before, test } = require('node:test');
 const projectRoot = path.join(os.tmpdir(), `theme-unit-acceptance-${process.pid}`);
 const userDataRoot = path.join(os.tmpdir(), `theme-unit-acceptance-userdata-${process.pid}`);
 const handlers = new Map();
+const appLifecycleHandlers = new Map();
 let mainModulePath;
+let selectedOpenPath;
 
 before(async () => {
   await fs.rm(projectRoot, { recursive: true, force: true });
@@ -40,7 +42,7 @@ before(async () => {
         return userDataRoot;
       },
       whenReady: () => Promise.resolve(),
-      on() {},
+      on(name, callback) { appLifecycleHandlers.set(name, callback); },
       quit() {},
     },
     BrowserWindow: class {
@@ -50,7 +52,7 @@ before(async () => {
       loadURL() { return Promise.resolve(); }
     },
     dialog: {
-      showOpenDialog: async () => ({ canceled: false, filePaths: [projectRoot] }),
+      showOpenDialog: async () => ({ canceled: false, filePaths: [selectedOpenPath || projectRoot] }),
     },
     ipcMain: {
       handle(name, handler) { handlers.set(name, handler); },
@@ -83,6 +85,7 @@ before(async () => {
 });
 
 after(async () => {
+  appLifecycleHandlers.get('before-quit')?.();
   if (mainModulePath) delete require.cache[mainModulePath];
   await fs.rm(projectRoot, { recursive: true, force: true });
   await fs.rm(userDataRoot, { recursive: true, force: true });
@@ -99,6 +102,27 @@ test('dynamic image element saves, interaction navigates, and full project versi
   assert.equal(opened.ok, true, opened.error);
   assert.deepEqual(opened.pages.map((page) => page.path).sort(), ['index.html', 'next.html']);
   const projectId = opened.id;
+
+  await t.test('layout scopes save once into standalone HTML with version backup and reject invalid writes', async () => {
+    const file = path.join(projectRoot, 'next.html');
+    const source = await fs.readFile(path.join(projectRoot, 'scripts/app.js'), 'utf8');
+    const config = { version: 1, edits: [{ target: 'main > img', selector: ':is(main > img):is(#stage[data-phase="hint"] *)', property: 'translate', value: '24px -8px', viewport: 'desktop' }], preferences: [{ target: 'main > img', group: 'position', scope: { mode: 'selected', states: ['hint', 'correct'] } }] };
+    const payload = { projectId, pagePath: 'next.html', config };
+    const first = await handler('project:save-layout-edits')(null, payload);
+    assert.equal(first.ok, true, first.error);
+    const saved = await fs.readFile(file, 'utf8');
+    assert.match(saved, /data-editor-layout-data/);
+    assert.match(saved, /data-editor-layout-runtime/);
+    assert.match(saved, /24px -8px/);
+    assert.equal((await handler('project:save-layout-edits')(null, payload)).ok, true);
+    assert.equal(await fs.readFile(file, 'utf8'), saved);
+    const versions = await handler('project:list-versions')(null, { projectId, pagePath: 'next.html' });
+    assert.ok(versions.versions.some(version => version.reason === '画面范围与布局保存'));
+    assert.equal((await handler('project:save-layout-edits')(null, { ...payload, config: { ...config, edits: [{ ...config.edits[0], value: '1px; color:red' }] } })).ok, false);
+    assert.equal((await handler('project:save-layout-edits')(null, { ...payload, pagePath: '../outside.html' })).ok, false);
+    assert.equal(await fs.readFile(file, 'utf8'), saved);
+    assert.equal(await fs.readFile(path.join(projectRoot, 'scripts/app.js'), 'utf8'), source);
+  });
 
   await t.test('a script-created image button can be moved and saved repeatedly without duplicate patches', async () => {
     const payload = {
@@ -157,6 +181,188 @@ test('dynamic image element saves, interaction navigates, and full project versi
     assert.equal((html.match(/data-editor-dynamic-content=/g) || []).length, 1);
     assert.match(html, /"nestedSrc":"\.\/assets\/sound-replaced\.png"/);
     assert.match(html, /"text":"声音按钮"/);
+  });
+
+  await t.test('shared nodes keep independent scene and device styles, migrating only an exact legacy rule', async () => {
+    const pagePath = 'scenes.html';
+    const filePath = path.join(projectRoot, pagePath);
+    await fs.writeFile(filePath, `<html><head>
+<style data-editor-dynamic="dynamic-panel-old" data-editor-viewport="desktop">img#panel[src="panel.png"] { width: 778px !important; transform: translate(36px, 11px) !important; }</style>
+<style data-editor-dynamic="unrelated">img#panel[src="panel.png"] + span { color: red; }</style>
+</head><body><main id="stage" data-phase="collect"><img id="panel" src="panel.png" data-editor-id="panel"><div id="box" data-editor-id="box"></div></main></body></html>`);
+    const save = async (id, tag, phase, styles, viewport = 'desktop') => {
+      const baseStyleSelector = tag === 'img' ? 'img#panel[src="panel.png"]' : 'div#box';
+      const stateScope = `:is(main#stage[data-phase="${phase}"] *)`;
+      const result = await handler('project:save-element')(null, {
+        projectId, pagePath, id, tag, viewport, baseStyleSelector, stateScope,
+        selector: tag === 'img' ? 'img#panel' : 'div#box',
+        styleSelector: `:is(${baseStyleSelector})${stateScope}`, styles,
+      });
+      assert.equal(result.ok, true, result.error);
+    };
+    await save('panel', 'img', 'hint', { transform: 'translate(50px, 30px)' });
+    await save('panel', 'img', 'collect', { transform: 'translate(-10px, -20px)' });
+    await save('panel', 'img', 'hint', { width: '700px' });
+    await save('panel', 'img', 'hint', { transform: 'translate(5px, 7px)' }, 'mobilePortrait');
+    await save('box', 'div', 'hint', { transform: 'translate(9px, 4px)' });
+    await save('box', 'div', 'collect', { width: '300px' });
+    const html = await fs.readFile(filePath, 'utf8');
+    const rules = [...html.matchAll(/<style\b[^>]*>[\s\S]*?<\/style>/g)].map(match => match[0]);
+    const hint = rules.find(rule => rule.includes('data-editor-viewport="desktop"') && rule.includes('img#panel') && rule.includes('data-phase="hint"'));
+    assert.match(hint, /width: 700px !important/);
+    assert.match(hint, /transform: translate\(50px, 30px\) !important/);
+    assert.ok(rules.some(rule => rule.includes('data-phase="collect"') && rule.includes('translate(-10px, -20px)')));
+    assert.ok(rules.some(rule => rule.includes('@media (max-width: 500px)') && rule.includes('translate(5px, 7px)')));
+    assert.ok(rules.some(rule => rule.includes('div#box') && rule.includes('data-phase="hint"') && rule.includes('translate(9px, 4px) !important')));
+    assert.ok(rules.some(rule => rule.includes('div#box') && rule.includes('data-phase="collect"') && rule.includes('width: 300px')));
+    assert.ok(html.includes('<style data-editor-dynamic="unrelated">img#panel[src="panel.png"] + span { color: red; }</style>'));
+    assert.doesNotMatch(html, /dynamic-panel-old/);
+    assert.ok(html.includes('<div id="box" data-editor-id="box"></div>'), 'scene edits do not become shared inline styles');
+    assert.equal(rules.length, 6, 'every scene/device rule survives edits to another scene');
+  });
+
+  await t.test('font size and dimensions survive separate saves across static, responsive and dynamic rules', async () => {
+    const pagePath = 'sizing.html';
+    const filePath = path.join(projectRoot, pagePath);
+    await fs.writeFile(filePath, '<html><head></head><body><h1 data-editor-id="heading">Title</h1></body></html>');
+    for (const viewport of ['desktop', 'tablet']) {
+      for (const styles of [{ fontSize: '48px' }, { width: '396px', height: '155px' }]) {
+        const result = await handler('project:save-element')(null, { projectId, pagePath, id: 'heading', viewport, styles });
+        assert.equal(result.ok, true, result.error);
+      }
+    }
+    let html = await fs.readFile(filePath, 'utf8');
+    assert.match(html, /font-size: 48px !important/);
+    assert.match(html.match(/<style data-editor-responsive[^>]*>[\s\S]*?<\/style>/)[0], /font-size: 48px !important; width: 396px !important; height: 155px !important/);
+    for (const styles of [{ fontSize: '36px' }, { width: '420px', height: '180px' }]) {
+      const result = await handler('project:save-element')(null, { projectId, pagePath, id: 'auto-sizing', auto: true, sourceType: 'dynamic', tag: 'button', selector: 'button.dynamic', styles });
+      assert.equal(result.ok, true, result.error);
+    }
+    html = await fs.readFile(filePath, 'utf8');
+    assert.match(html.match(/<style data-editor-dynamic[^>]*>[\s\S]*?<\/style>/)[0], /font-size: 36px !important; width: 420px !important; height: 180px !important/);
+  });
+
+  await t.test('clearing and repeating style saves keeps desktop, responsive and dynamic rules consistent', async () => {
+    const pagePath = 'clear-style.html';
+    const filePath = path.join(projectRoot, pagePath);
+    await fs.writeFile(filePath, '<html><head></head><body><h1 data-editor-id="clear">Title</h1></body></html>');
+    for (const viewport of ['desktop', 'tablet', 'mobilePortrait', 'mobileLandscape']) {
+      for (const styles of [{ fontSize: '40px' }, { fontSize: '40px' }, { fontSize: '' }, { fontSize: '' }]) {
+        const result = await handler('project:save-element')(null, { projectId, pagePath, id: 'clear', viewport, styles });
+        assert.equal(result.ok, true, result.error);
+      }
+    }
+    assert.doesNotMatch(await fs.readFile(filePath, 'utf8'), /font-size/);
+    await fs.writeFile(filePath, '<html><body><h1 data-editor-id="clear" style="font-size:30px!important;color:red">Title</h1></body></html>');
+    const prioritized = await handler('project:save-element')(null, { projectId, pagePath, id: 'clear', styles: { fontSize: '48px' } });
+    assert.equal(prioritized.ok, true, prioritized.error);
+    assert.match(await fs.readFile(filePath, 'utf8'), /font-size: 48px !important/);
+    assert.match(await fs.readFile(filePath, 'utf8'), /color: red/);
+    const payload = { projectId, pagePath, id: 'auto-clear', auto: true, sourceType: 'dynamic', tag: 'button', selector: 'button.generated' };
+    for (const styles of [{ fontSize: '35px', width: '100px' }, { fontSize: '' }, { width: '' }]) {
+      const result = await handler('project:save-element')(null, { ...payload, styles });
+      assert.equal(result.ok, true, result.error);
+    }
+    assert.doesNotMatch(await fs.readFile(filePath, 'utf8'), /data-editor-dynamic=/);
+  });
+
+  await t.test('text saves preserve SVG titles, nested tags and sibling counters', async () => {
+    const pagePath = 'rich-text.html';
+    const filePath = path.join(projectRoot, pagePath);
+    await fs.writeFile(filePath, '<html><body><div data-editor-id="rich"><svg><title>Icon</title></svg><!-- Keep this --><div>Label</div><b>0/3</b></div><p>After</p></body></html>');
+    const result = await handler('project:save-element')(null, { projectId, pagePath, id: 'rich', text: 'Next <&>' });
+    assert.equal(result.ok, true, result.error);
+    const html = await fs.readFile(filePath, 'utf8');
+    assert.match(html, /<svg><title>Icon<\/title><\/svg><!-- Keep this --><div>Next &lt;&amp;&gt;<\/div><b>0\/3<\/b>/);
+    assert.match(html, /<p>After<\/p>/);
+  });
+
+  await t.test('dynamic image updates retain previously saved text and other element overrides', async () => {
+    const pagePath = 'dynamic-content.html';
+    const filePath = path.join(projectRoot, pagePath);
+    await fs.writeFile(filePath, '<html><body></body></html>');
+    const base = { projectId, pagePath, auto: true, sourceType: 'dynamic', tag: 'button' };
+    for (const id of ['first', 'second']) {
+      const result = await handler('project:save-element')(null, { ...base, id, selector: `button.${id}`, text: `${id} label` });
+      assert.equal(result.ok, true, result.error);
+    }
+    for (const source of ['./one.png', './two.png']) {
+      const result = await handler('project:save-element')(null, { ...base, id: 'second', selector: 'button.second', nestedImage: { selector: 'button.second img', src: source, index: 0 } });
+      assert.equal(result.ok, true, result.error);
+    }
+    const html = await fs.readFile(filePath, 'utf8');
+    assert.match(html, /"text":"first label"/); assert.match(html, /"text":"second label"/);
+    assert.match(html, /"nestedSrc":"\.\/two.png"/);
+    assert.equal((html.match(/data-editor-dynamic-content=/g) || []).length, 2);
+  });
+
+  await t.test('replacing image assets copies the file and saves a device-specific source', async () => {
+    const sourcePath = path.join(projectRoot, 'assets', 'replacement.png');
+    await fs.writeFile(sourcePath, 'replacement image bytes');
+    selectedOpenPath = sourcePath;
+    assert.equal(await handler('asset:choose')(), sourcePath);
+    const copied = await handler('asset:copy')(null, { projectId, pagePath: 'index.html', sourcePath });
+    assert.equal(copied.ok, true, copied.error);
+    assert.equal(await fs.readFile(path.join(projectRoot, copied.relativePath), 'utf8'), 'replacement image bytes');
+    selectedOpenPath = null;
+
+    const staticPage = 'image-replacement.html';
+    const staticFile = path.join(projectRoot, staticPage);
+    await fs.writeFile(staticFile, '<html><body><img id="picture" src="./assets/sound.png" alt="picture"></body></html>');
+    const staticResult = await handler('project:save-element')(null, {
+      projectId, pagePath: staticPage, id: 'auto-picture', auto: true, sourceType: 'html',
+      tag: 'img', selector: 'img#picture', tagIndex: 0,
+      outerHTML: '<img id="picture" src="./assets/sound.png" alt="picture">',
+      attributes: { src: copied.relativePath }, styles: {},
+      imageReplacement: { kind: 'src', index: 0, src: copied.relativePath, viewport: 'phone' },
+    });
+    assert.equal(staticResult.ok, true, staticResult.error);
+    const staticHtml = await fs.readFile(staticFile, 'utf8');
+    assert.match(staticHtml, /src="\.\/assets\/sound\.png"/, 'phone replacement leaves the computer image in the authored HTML');
+    assert.match(staticHtml, /data-editor-image-replacement/);
+    assert.match(staticHtml, /"phone":/);
+
+    const dynamicPage = 'dynamic-image-replacement.html';
+    const dynamicFile = path.join(projectRoot, dynamicPage);
+    await fs.writeFile(dynamicFile, '<html><body></body></html>');
+    const dynamicResult = await handler('project:save-element')(null, {
+      projectId, pagePath: dynamicPage, id: 'auto-dynamic-picture', auto: true, sourceType: 'dynamic',
+      tag: 'img', selector: 'img#dynamic-picture', attributes: { src: copied.relativePath }, styles: {},
+      imageReplacement: { kind: 'src', index: 0, src: copied.relativePath, viewport: 'all' },
+    });
+    assert.equal(dynamicResult.ok, true, dynamicResult.error);
+    const dynamicHtml = await fs.readFile(dynamicFile, 'utf8');
+    assert.match(dynamicHtml, /data-editor-image-runtime/);
+    assert.match(dynamicHtml, /"all":/);
+  });
+
+  await t.test('opening an HTML file uses the selected entry and retains the current project resource root', async () => {
+    try {
+      selectedOpenPath = path.join(projectRoot, 'next.html');
+      let result = await handler('project:open')(null, 'file');
+      assert.equal(result.ok, true, result.error);
+      assert.match(result.entryUrl, /next\.html$/);
+      assert.equal(result.rootPath, projectRoot);
+      await fs.mkdir(path.join(projectRoot, 'pages'), { recursive: true });
+      selectedOpenPath = path.join(projectRoot, 'pages', 'lesson.html');
+      await fs.writeFile(selectedOpenPath, '<html><body>Lesson</body></html>');
+      result = await handler('project:open')(null, 'file', projectId);
+      assert.equal(result.ok, true, result.error);
+      assert.equal(result.rootPath, projectRoot);
+      assert.match(result.entryUrl, /pages\/lesson\.html$/);
+      assert.ok(result.pages.some((page) => page.path === 'pages/lesson.html'));
+    } finally { selectedOpenPath = undefined; }
+  });
+
+  await t.test('manual imports are remembered and only registered catalog keys can open projects', async () => {
+    const recent = JSON.parse(await fs.readFile(path.join(userDataRoot, 'recent-projects.json'), 'utf8'));
+    assert.ok(recent.length > 0);
+    const known = await handler('project:open-known')(null, recent[0].key);
+    assert.equal(known.ok, true, known.error);
+    assert.equal(known.rootPath, projectRoot);
+    assert.equal(known.catalogKey, recent[0].key);
+    const invalid = await handler('project:open-known')(null, '../arbitrary-project');
+    assert.equal(invalid.ok, false);
   });
 
   await t.test('navigation interaction reads back, updates in place, and can be removed', async () => {
