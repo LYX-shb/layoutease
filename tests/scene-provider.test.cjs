@@ -39,3 +39,15 @@ test('scene recognition respects authored markers and prefers the public state A
   w.__editorSceneProvider.sync();
   assert.equal(owner.dataset.phase, 'answer');
 });
+
+test('native presentation changes preserve scene identity and retire old marker ownership', t => {
+  const dom = new JSDOM('<main data-editor-scene-owner="course-state-api"><div id="scene"></div></main>', { runScripts:'outside-only' });
+  t.after(()=>dom.window.close());
+  const w=dom.window,d=w.document;
+  w.FIGMA={scenes:['<svg><g data-node="one"><path d="M0 0h20v20z"/></g></svg>','<svg><g data-node="two"><path d="M0 0h40v20z"/></g></svg>']};
+  d.querySelector('#scene').innerHTML=w.FIGMA.scenes[1];
+  d.querySelector('g').setAttribute('display','none');
+  w.eval('('+installSceneProvider.toString()+')()');
+  assert.equal(d.querySelector('main').dataset.phase,'figma-scene-2');
+  assert.equal(d.querySelector('main').dataset.editorSceneOwner,'course-state-api-v5');
+});

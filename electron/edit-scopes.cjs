@@ -1,5 +1,6 @@
 const { installSceneProvider } = require('./scene-provider.cjs');
 const { installSvgSceneLayout } = require('./svg-scene-layout.cjs');
+const { installCourseComponents } = require('./course-components.cjs');
 const properties = ['display', 'font-size', 'color', 'width', 'height', 'margin', 'padding', 'background-image', 'transform', 'translate'];
 const devices = ['desktop', 'tablet', 'mobilePortrait', 'mobileLandscape', 'phone'];
 
@@ -631,13 +632,14 @@ function upsertLayoutDocument(html, input) {
   const config = normalizeLayoutConfig(input);
   const savedRuntime = html.match(/<script\b[^>]*\bdata-editor-layout-runtime(?:\s|=|>)[\s\S]*?<\/script\s*>/i)?.[0];
   const cleaned = html.replace(/<script\b[^>]*\bdata-editor-layout-(?:data|runtime)(?:\s|=|>)[\s\S]*?<\/script\s*>/gi, '')
-    .replace(/<script\b[^>]*\bdata-editor-(?:scene|svg-layout)-runtime(?:\s|=|>)[\s\S]*?<\/script\s*>/gi, '');
+    .replace(/<script\b[^>]*\bdata-editor-(?:scene|svg-layout|component)-runtime(?:\s|=|>)[\s\S]*?<\/script\s*>/gi, '');
   if (!config.edits.length && !config.preferences.length && !config.visibility.length && !config.shared.length && !config.groups.length && !config.anchors.length && !config.svgPins?.length) return cleaned;
   const json = JSON.stringify(config).replace(/</g, '\\u003c');
   const runtime = savedRuntime || `<script data-editor-layout-runtime data-editor-runtime-version="phone-v2">(${installLayoutRuntime.toString()})();</script>`;
   const sceneRuntime = `<script data-editor-scene-runtime>(${installSceneProvider.toString()})();</script>`;
   const svgRuntime = config.svgPins?.length ? `<script data-editor-svg-layout-runtime>(${installSvgSceneLayout.toString()})();</script>` : '';
-  const block = `${sceneRuntime}<script type="application/json" data-editor-layout-data>${json}</script>${runtime}${svgRuntime}`;
+  const componentRuntime = config.svgPins?.some(pin => pin.nodes.includes('component-shopping-basket')) ? `<script data-editor-component-runtime>(${installCourseComponents.toString()})();</script>` : '';
+  const block = `${componentRuntime}${sceneRuntime}<script type="application/json" data-editor-layout-data>${json}</script>${runtime}${svgRuntime}`;
   return /<\/body>/i.test(cleaned) ? cleaned.replace(/<\/body>/i, `${block}</body>`) : cleaned + block;
 }
 

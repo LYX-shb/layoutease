@@ -1,10 +1,14 @@
 // An additive renderer: existing saved layout code keeps ownership of authored
 // styles. Explicit SVG geometry locks live on separate, reversible SVG groups.
 function installSvgSceneLayout() {
-  if (window.__editorSvgSceneLayout) return window.__editorSvgSceneLayout.wrap(window.__editorLayoutRuntime);
+  if (window.__editorSvgSceneLayout?.version >= 2) return window.__editorSvgSceneLayout.wrap(window.__editorLayoutRuntime);
   const clone = value => JSON.parse(JSON.stringify(value));
   const records = new Map(), virtualTranslations = new WeakMap(), wrapped = new WeakSet();
-  let pins = [], source, scenes = [], latest;
+  let pins = [], source, scenes = [], latest, delegating = 0;
+  function delegate(action) {
+    const current = pins; delegating++;
+    try { return action(); } finally { pins = current; delegating--; }
+  }
   function sceneList() {
     if (source !== window.FIGMA?.scenes) {
       source = window.FIGMA?.scenes;
@@ -21,6 +25,7 @@ function installSvgSceneLayout() {
     return Array.from(root.querySelectorAll('[id]')).find(node => node.id === value.slice(1));
   }
   function fingerprint(node, root, detailed = false) {
+    if (node.hasAttribute('data-editor-component')) return JSON.stringify({ component: node.getAttribute('data-editor-component') });
     const uses = Array.from(node.querySelectorAll('use'), use => {
       const resource = reference(root, use.getAttribute('href') || use.getAttribute('xlink:href'));
       return resource instanceof Element ? resource.getAttribute('href') || resource.getAttribute('xlink:href') || resource.outerHTML.replace(/\sid="[^"]*"/g, '') : resource;
@@ -46,7 +51,7 @@ function installSvgSceneLayout() {
     const ids = [], matched = [];
     roots.forEach((root, index) => {
       if (!root) return;
-      let candidates = Array.from(root.querySelectorAll('g[data-node]')).filter(node => fingerprint(node, root) === key && key !== null);
+      let candidates = Array.from(root.querySelectorAll('g[data-node],svg[data-editor-component][data-node]')).filter(node => fingerprint(node, root) === key && key !== null);
       if (candidates.length > 1) candidates = candidates.filter(node => fingerprint(node, root, true) === detail);
       const state = 'figma-scene-' + (index + 1);
       const requested = mode === 'all' || states.includes(state);
@@ -59,7 +64,8 @@ function installSvgSceneLayout() {
     const nodes = [...new Set(ids)];
     return { nodes, rootSelector, selector: rootSelector + ' :is(' + nodes.map(id => '[data-node=' + JSON.stringify(id) + ']').join(',') + ')' };
   }
-  function rootOf(element) { return element instanceof SVGElement && element.matches('g[data-node]') ? element.ownerSVGElement : null; }
+  function rootOf(element) { return element instanceof SVGElement && element.matches('g[data-node],svg[data-editor-component][data-node]') ? element.ownerSVGElement : null; }
+  function rectOf(element) { return (element.matches('svg[data-editor-component]') && element.querySelector(':scope > [data-editor-component-bounds]') || element).getBoundingClientRect(); }
   function currentViewport(base) {
     if (base.isPhone?.()) return 'phone';
     return innerWidth <= 500 ? 'mobilePortrait' : innerWidth <= 900 ? 'mobileLandscape' : innerWidth <= 1200 ? 'tablet' : 'desktop';
@@ -77,7 +83,7 @@ function installSvgSceneLayout() {
     return candidates.findLast(pin => pin.viewport !== 'desktop') || candidates.at(-1);
   }
   function boxOf(element) {
-    const root = rootOf(element), bounds = root?.getBoundingClientRect(), rect = element.getBoundingClientRect();
+    const root = rootOf(element), bounds = root?.getBoundingClientRect(), rect = rectOf(element);
     if (!bounds?.width || !bounds.height || !rect.width || !rect.height) throw Error('组件尚未显示，无法固定位置与尺寸');
     return { x: (rect.left - bounds.left) / bounds.width, y: (rect.top - bounds.top) / bounds.height, width: rect.width / bounds.width, height: rect.height / bounds.height };
   }
@@ -86,6 +92,7 @@ function installSvgSceneLayout() {
     records.delete(element);
   }
   function applyPins() {
+    if (delegating) return;
     if (typeof DOMMatrix === 'undefined') return;
     const candidates = new Set();
     for (const pin of pins) if (active(pin)) try { document.querySelectorAll(pin.selector).forEach(element => candidates.add(element)); } catch {}
@@ -105,7 +112,7 @@ function installSvgSceneLayout() {
       if (record.signature !== signature) {
         record.matrix = new DOMMatrix(); record.wrapper.removeAttribute('transform'); record.signature = signature;
       }
-      const bounds = root.getBoundingClientRect(), rect = element.getBoundingClientRect();
+      const bounds = root.getBoundingClientRect(), rect = rectOf(element);
       if (!bounds.width || !bounds.height || !rect.width || !rect.height) continue;
       const width = size ? size.box.width * bounds.width : rect.width, height = size ? size.box.height * bounds.height : rect.height;
       const x = position ? bounds.left + position.box.x * bounds.width : rect.left, y = position ? bounds.top + position.box.y * bounds.height : rect.top;
@@ -132,14 +139,26 @@ function installSvgSceneLayout() {
   }
   function wrap(base) {
     if (!base || wrapped.has(base)) return base;
-    pins = clone(base.snapshot().svgPins || pins);
+    pins = clone(window.__editorPendingSvgPins || base.snapshot().svgPins || pins);
+    delete window.__editorPendingSvgPins;
+    pins = pins.map(pin => {
+      const binding = pin.nodes.length === 1 && window.__editorCourseComponents?.bindings?.find(item => item.node === pin.nodes[0]);
+      if (!binding) return pin;
+      const [x, y, width, height] = binding.crop;
+      return { ...pin, nodes: [binding.component], selector: pin.rootSelector + ' [data-node=' + JSON.stringify(binding.component) + ']',
+        box: { x: pin.box.x + pin.box.width * x, y: pin.box.y + pin.box.height * y, width: pin.box.width * width, height: pin.box.height * height } };
+    });
+    // Earlier additive runtimes remain part of saved pages. Keep their pin
+    // renderer dormant while this version owns the new component geometry.
+    delegate(() => base.restore({ ...base.snapshot(), svgPins: [] }));
     let applying = false;
-    const persist = () => { base.restore({ ...base.snapshot(), svgPins: clone(pins) }); applyPins(); };
+    const persist = () => { delegate(() => base.restore({ ...base.snapshot(), svgPins: [] })); applyPins(); };
     const api = { ...base,
       snapshot: () => ({ ...base.snapshot(), svgPins: clone(pins) }),
-      restore(value) { pins = clone(value.svgPins || []); base.restore(value); applyPins(); },
-      apply() { if (applying) return; applying = true; try { base.apply(); applyPins(); } finally { applying = false; } },
+      restore(value) { pins = clone(value.svgPins || []); delegate(() => base.restore({ ...value, svgPins: [] })); applyPins(); },
+      apply() { if (applying) return; applying = true; try { delegate(() => base.apply()); applyPins(); } finally { applying = false; } },
       svgGeometry: geometry,
+      svgRect: element => element.matches('svg[data-editor-component]') ? rectOf(element) : null,
       svgTranslation: element => forElement(element, 'position') ? translation(element) : null,
       setSvgScope(element, identity, group, mode, states) {
         const root = rootOf(element);
@@ -175,7 +194,7 @@ function installSvgSceneLayout() {
           delete rest[name]; changed = true;
         }
         const updated = changed ? clone(pins) : null;
-        if (Object.keys(rest).length) base.writeMany(identity, rest);
+        if (Object.keys(rest).length) delegate(() => base.writeMany(identity, rest));
         if (updated) pins = updated;
         if (changed) persist();
       },
@@ -187,7 +206,7 @@ function installSvgSceneLayout() {
   const schedule = () => { if (!queued) { queued = true; queueMicrotask(() => { queued = false; applyPins(); }); } };
   new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true, attributes: true });
   window.addEventListener('resize', schedule);
-  window.__editorSvgSceneLayout = { wrap };
+  window.__editorSvgSceneLayout = { version: 2, wrap };
   return wrap(window.__editorLayoutRuntime);
 }
 

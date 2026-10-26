@@ -10,6 +10,10 @@ const project = path.join(root, 'project');
 const course = process.argv.find(arg => arg.startsWith('--course='))?.slice(9);
 if (course) fs.cpSync(course, project, { recursive: true });
 else fs.mkdirSync(project);
+if (process.argv.includes('--without-old-svg-runtime')) {
+  const file = path.join(project, 'index.html');
+  fs.writeFileSync(file, fs.readFileSync(file,'utf8').replace(/<script\b[^>]*data-editor-svg-layout-runtime[^>]*>[\s\S]*?<\/script>/gi,''));
+}
 const image = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="120" height="80"%3E%3Crect width="120" height="80" fill="orange"/%3E%3C/svg%3E';
 const fixture = `<!doctype html><html><head><style>
 body{margin:20px}.case{position:relative;display:inline-block;width:140px;height:100px;margin:10px;vertical-align:top}
@@ -18,7 +22,7 @@ body{margin:20px}.case{position:relative;display:inline-block;width:140px;height
 .rotated{transform:rotate(30deg)}.hidden{visibility:hidden}.clipped{clip-path:inset(0 50% 0 0)}
 .behind{position:absolute;inset:0}.opaque{position:absolute;inset:0;background:white}
 </style></head><body>
-<div class="case"><img id="covered-art" class="art" src='${image}'><button id="hit-area" class="cover" aria-label="交互热区"></button></div>
+<div class="case"><img id="covered-art" class="art" src='${image}'><button id="hit-area" class="cover" aria-label="交互热区"></button><svg style="position:absolute;inset:0;pointer-events:none" width="140" height="100"><g data-node="overlay-a"><rect width="5" height="5" fill="blue"/></g><g data-node="overlay-b"><rect x="130" width="5" height="5" fill="blue"/></g></svg></div>
 <div class="case"><div id="css-art" class="background"></div><button class="cover" aria-label="背景热区"></button></div>
 <div class="case"><button id="multi-button" class="cover"><img id="first-icon" style="position:absolute;left:0;top:0;width:40px;height:40px;pointer-events:none" src='${image}'><img id="second-icon" style="position:absolute;right:0;bottom:0;width:40px;height:40px;pointer-events:none" src='${image}'></button></div>
 <div class="case"><img id="text-backdrop" class="art" src='${image}'><button class="cover"><span id="visible-text">下一题</span></button></div>
@@ -37,7 +41,7 @@ const nativeHandle = electron.ipcMain.handle.bind(electron.ipcMain);
 const replacement = {
   ...electron,
   BrowserWindow: class extends electron.BrowserWindow {
-    constructor(options) { super({ ...options, width: 1600, height: 1000, show: false, webPreferences: { ...options.webPreferences, backgroundThrottling: false } }); win = this; }
+    constructor(options) { super({ ...options, width: 1600, height: 1000, show: false, webPreferences: { ...options.webPreferences, backgroundThrottling: false } }); win = this; if(process.argv.includes('--debug-console')) this.webContents.on('console-message',(...args)=>console.log('Renderer:',typeof args[1]==='object'?args[1].message:args[2])); }
   },
   dialog: { ...electron.dialog, showOpenDialog: async () => ({ canceled: false, filePaths: [project] }) },
   ipcMain: { handle(name, handler) { nativeHandle(name, name === 'project:catalog' ? async () => ({ ok: true, items: [], lastKey: '', limited: false }) : handler); } },
@@ -89,13 +93,14 @@ async function checkSvgSync() {
   const original = fs.readFileSync(path.join(project, 'index.html'), 'utf8');
   const oldRenderer = original.match(/<script\b[^>]*\bdata-editor-layout-runtime(?:\s|=|>)[\s\S]*?<\/script\s*>/i)?.[0];
   const remember = name => { results.push({ name, pass: true }); console.log('PASS ' + name); };
-  const target = '#scene [data-node="1:508"]';
+  const basket = process.argv.includes('--basket');
+  const target = basket ? '#scene [data-node="component-shopping-basket"]' : '#scene [data-node="1:508"]';
   await page(`document.querySelector('#hand')?.getAnimations().forEach(a=>a.finish())`);
   for (let attempt = 0; attempt < 12; attempt++) {
     const selection = await pick(target, .03, .96, attempt > 0);
     if (selection.selector && await page(`document.querySelector(${JSON.stringify(selection.selector)})===document.querySelector(${JSON.stringify(target)})`)) break;
   }
-  assert.ok(await ui(`window.__selection?.selector.includes('1:508')`), 'select the user-reported panel');
+  assert.ok(await ui(`window.__selection?.selector.includes(${JSON.stringify(basket ? 'component-shopping-basket' : '1:508')})`), 'select the intended component');
   await ui(`window.__svgErrors=[];window.addEventListener('message',e=>{if(e.data?.type==='scope-error')window.__svgErrors.push(e.data.message)})`);
   const command = async (group, mode = 'all', states = []) => {
     await ui(`document.querySelector('iframe').contentWindow.postMessage({source:'theme-unit-editor',type:'set-edit-scope',id:window.__selection.id,group:${JSON.stringify(group)},mode:${JSON.stringify(mode)},states:${JSON.stringify(JSON.stringify(states))}},'*')`);
@@ -105,7 +110,7 @@ async function checkSvgSync() {
   await command('position'); await command('size');
   assert.equal(await page('window.__editorLayoutRuntime.snapshot().svgPins.length'), 2);
   remember('choosing all scenes snapshots actual position and size without requiring a drag');
-  const read = () => page(`(()=>{const p=window.__editorLayoutRuntime.snapshot().svgPins[0],e=document.querySelector(p.selector),r=e.getBoundingClientRect(),s=e.ownerSVGElement.getBoundingClientRect();return {x:(r.left-s.left)/s.width,y:(r.top-s.top)/s.height,width:r.width/s.width,height:r.height/s.height}})()`);
+  const read = () => page(`(()=>{const p=window.__editorLayoutRuntime.snapshot().svgPins[0],e=document.querySelector(p.selector),r=window.__editorLayoutRuntime.svgRect?.(e)||e.getBoundingClientRect(),s=e.ownerSVGElement.getBoundingClientRect();return {x:(r.left-s.left)/s.width,y:(r.top-s.top)/s.height,width:r.width/s.width,height:r.height/s.height}})()`);
   const expected = await read();
   async function allScenes(label) {
     for (let index = 0; index < 6; index++) {
@@ -132,14 +137,14 @@ async function checkSvgSync() {
     const selection = await pick(selector, .03, .96, attempt > 0);
     if (selection.selector && await page(`document.querySelector(${JSON.stringify(selection.selector)})===document.querySelector(${JSON.stringify(selector)})`)) break;
   }
-  const rawBefore = await page(`document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect().toJSON()`);
+  const rawBefore = await page(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});return (window.__editorLayoutRuntime.svgRect?.(e)||e.getBoundingClientRect()).toJSON()})()`);
   await page(`(()=>{const e=document.querySelector('[data-move-tool]'),r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:9,clientX:x,clientY:y}));document.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:9,clientX:x+70,clientY:y+35}));document.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:9,clientX:x+70,clientY:y+35}))})()`);
   await delay(80);
-  const rawAfter = await page(`document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect().toJSON()`);
+  const rawAfter = await page(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});return (window.__editorLayoutRuntime.svgRect?.(e)||e.getBoundingClientRect()).toJSON()})()`);
   assert.ok(Math.abs(rawAfter.x-rawBefore.x-70)<.3 && Math.abs(rawAfter.y-rawBefore.y-35)<.3, 'locked SVG component still follows a drag');
   await page(`(()=>{const e=document.querySelector('[data-resize-direction="e"]'),r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:10,clientX:x,clientY:y}));document.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:10,clientX:x+80,clientY:y}));document.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:10,clientX:x+80,clientY:y}))})()`);
   await delay(80);
-  const resized = await page(`document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect().toJSON()`);
+  const resized = await page(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});return (window.__editorLayoutRuntime.svgRect?.(e)||e.getBoundingClientRect()).toJSON()})()`);
   assert.ok(Math.abs(resized.width-rawAfter.width-80)<.3, 'locked SVG component still follows a width handle');
   Object.assign(expected, await read());
   await allScenes('dragging and resizing a synchronized object updates all six scenes');
@@ -160,11 +165,41 @@ async function checkSvgSync() {
     for (let index=0;index<6;index++) {
       await standalone.webContents.executeJavaScript(`document.querySelector('#scene').innerHTML=window.FIGMA.scenes[${index}]`);
       await delay(90);
-      const rect = await standalone.webContents.executeJavaScript(`(()=>{const p=window.__editorLayoutRuntime.snapshot().svgPins[0],e=document.querySelector(p.selector),r=e.getBoundingClientRect(),s=e.ownerSVGElement.getBoundingClientRect();return {x:(r.left-s.left)/s.width,y:(r.top-s.top)/s.height,width:r.width/s.width,height:r.height/s.height}})()`);
+      const rect = await standalone.webContents.executeJavaScript(`(()=>{const p=window.__editorLayoutRuntime.snapshot().svgPins[0],e=document.querySelector(p.selector),r=window.__editorLayoutRuntime.svgRect?.(e)||e.getBoundingClientRect(),s=e.ownerSVGElement.getBoundingClientRect();return {x:(r.left-s.left)/s.width,y:(r.top-s.top)/s.height,width:r.width/s.width,height:r.height/s.height}})()`);
       for (const key of Object.keys(savedExpected)) assert.ok(Math.abs(rect[key]-savedExpected[key])<.0002, 'standalone scene '+index+' '+key);
     }
     assert.equal(await standalone.webContents.executeJavaScript(`!!document.querySelector('[data-editor-tools]')`),false);
     remember('standalone HTML keeps all six scenes fixed without editor bridge scripts');
+    if (basket) {
+      const directory = path.resolve(__dirname, '../release/basket-native-check'); fs.mkdirSync(directory,{recursive:true});
+      standalone.showInactive();
+      await standalone.loadFile(path.join(project,'index.html'));
+      const nativeStates = [];
+      async function verifyNative(phase) {
+        await delay(100);
+        const state = await standalone.webContents.executeJavaScript(`(()=>{const e=document.querySelector('[data-node="component-shopping-basket"]'),r=window.__editorLayoutRuntime.svgRect(e),s=e.ownerSVGElement.getBoundingClientRect();return {phase:document.querySelector('main').dataset.phase,x:(r.left-s.left)/s.width,y:(r.top-s.top)/s.height,width:r.width/s.width,height:r.height/s.height,parts:e.querySelectorAll('g[data-node]').length}})()`);
+        if (!state.phase) console.log('Scene mismatch:',await standalone.webContents.executeJavaScript(`(()=>{const clean=n=>{n=n.cloneNode(true);for(const g of [...n.querySelectorAll('[data-editor-svg-lock]')].reverse())g.replaceWith(...g.childNodes);for(const e of [n,...n.querySelectorAll('*')])for(const a of [...e.attributes])if(a.name==='style'||a.name.startsWith('data-editor-'))e.removeAttribute(a.name);return n.outerHTML};const t=document.createElement('template');t.innerHTML=window.FIGMA.scenes[${phase-1}];const a=clean(document.querySelector('#scene > svg')),b=clean(t.content.firstElementChild);let i=0;while(i<a.length&&a[i]===b[i])i++;return {i,actual:a.slice(i-100,i+200),expected:b.slice(i-100,i+200)}})()`));
+        assert.equal(state.phase,'figma-scene-'+phase);
+        for(const key of Object.keys(savedExpected)) assert.ok(Math.abs(state[key]-savedExpected[key])<.0002,'native scene '+phase+' '+key);
+        nativeStates.push(state);
+        await standalone.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        fs.writeFileSync(path.join(directory,'scene-'+phase+'.png'),(await standalone.webContents.capturePage()).toPNG());
+      }
+      const nativeClick = selector => standalone.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(selector)}).click()`);
+      const food = name => nativeClick('button[aria-label="把一'+(name==='糖果'?'罐糖果':'盒饼干')+'放进购物篮"]');
+      await verifyNative(1);
+      await food('糖果'); await verifyNative(2);
+      await nativeClick('#restart'); await food('饼干'); await verifyNative(3);
+      await food('糖果'); await verifyNative(4);
+      await standalone.webContents.executeJavaScript(`for(const type of ['number','symbol']){const c=window.FIGMA.cards.find(c=>c.type===type&&c.value!==(type==='number'?'37':'<'));document.querySelector('[data-card='+JSON.stringify(c.id)+']').click()}`);
+      await verifyNative(6);
+      await nativeClick('#restart'); await food('饼干'); await food('糖果');
+      await standalone.webContents.executeJavaScript(`for(const value of ['37','<']){const c=window.FIGMA.cards.find(c=>c.value===value);document.querySelector('[data-card='+JSON.stringify(c.id)+']').click()}`);
+      await verifyNative(5);
+      await nativeClick('#restart'); await verifyNative(1);
+      fs.writeFileSync(path.join(directory,'result.json'),JSON.stringify(nativeStates,null,2));
+      remember('actual food, answer, wrong, correct and restart handlers keep the complete basket fixed');
+    }
   } finally { standalone.destroy(); }
   const directory = path.resolve(__dirname, '../release/svg-sync-check');
   fs.mkdirSync(directory, { recursive: true });

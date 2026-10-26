@@ -8,6 +8,7 @@ const { repairLegacyEditorSelectors } = require('./editor-selectors.cjs');
 const { installLayoutRuntime, upsertLayoutDocument } = require('./edit-scopes.cjs');
 const { installSceneProvider } = require('./scene-provider.cjs');
 const { installSvgSceneLayout } = require('./svg-scene-layout.cjs');
+const { installCourseComponents } = require('./course-components.cjs');
 const { watchProject } = require('./project-watch.cjs');
 const { installImageReplacementRuntime, upsertImageReplacementOverride } = require('./image-replacement.cjs');
 const { registerPageSharing } = require('./page-sharing.cjs');
@@ -96,7 +97,8 @@ const mobilePreviewBootstrap = String.raw`<script data-editor-mobile-preview>
 </script>`;
 
 const previewPlaybackBootstrap = '<script data-editor-playback>(' + installPreviewPlayback.toString() + ')();</script>';
-const previewBridgeScript = '<script>(' + installSceneProvider.toString() + ')();</script>'
+const previewBridgeScript = '<script>(' + installCourseComponents.toString() + ')();</script>'
+  + '<script>(' + installSceneProvider.toString() + ')();</script>'
   + '<script>(' + installLayoutRuntime.toString() + ')({ renderer: window.__editorLayoutRuntime });</script>'
   + '<script>(' + installSvgSceneLayout.toString() + ')();</script>'
   + '<script>(' + installImageReplacementRuntime.toString() + ')();</script>' + String.raw`<script>
@@ -156,6 +158,8 @@ const previewBridgeScript = '<script>(' + installSceneProvider.toString() + ')()
   }
 
   function graphicRoot(element) {
+    const component = element.closest('svg[data-editor-component]');
+    if (component) return component;
     const svg = element.closest('svg');
     if (!svg) return element;
     // Figma scenes contain many independent authored objects. Keep their node
@@ -169,7 +173,8 @@ const previewBridgeScript = '<script>(' + installSceneProvider.toString() + ')()
     // Interaction target picking follows the authored controls. Image editing
     // instead follows the painted layers, including assets below empty hit areas.
     if (targetPicking) return event.target;
-    const isGraphic = (element) => element.matches('img, svg, canvas, g[data-node]') || getComputedStyle(element).backgroundImage !== 'none';
+    const isSceneViewport = element => element.matches('svg:not([data-editor-component])') && element.querySelectorAll('[data-node]').length > 1;
+    const isGraphic = (element) => !isSceneViewport(element) && (element.matches('img, svg, canvas, g[data-node]') || getComputedStyle(element).backgroundImage !== 'none');
     const visibleAtPoint = (element) => {
       if (!element.getClientRects().length || element.closest('[data-editor-tools]')) return false;
       const rect = element.getBoundingClientRect();
@@ -215,6 +220,9 @@ const previewBridgeScript = '<script>(' + installSceneProvider.toString() + ')()
       };
       for (const element of stack) {
         if (['HTML', 'BODY'].includes(element.tagName)) continue;
+        // A scene-sized SVG overlay only paints its child objects. Its empty
+        // viewport must let picking continue to the artwork underneath.
+        if (isSceneViewport(element)) continue;
         const graphic = graphicRoot(element);
         if (isGraphic(graphic)) return graphic;
         // Empty transparent buttons and wrappers are hit areas, not artwork.
@@ -542,7 +550,7 @@ const previewBridgeScript = '<script>(' + installSceneProvider.toString() + ')()
   }
 
   function elementGeometry(element) {
-    const rect = element.getBoundingClientRect();
+    const rect = layoutRuntime.svgRect?.(element) || element.getBoundingClientRect();
     // Resize along the authored layout axes. A bee's scaleX(-1) flips its art,
     // not the direction in which its CSS width grows.
     const pinned = layoutRuntime.svgGeometry?.(element);
@@ -612,7 +620,7 @@ const previewBridgeScript = '<script>(' + installSceneProvider.toString() + ')()
     const rects = selectedElements.filter(element => element.isConnected).flatMap(element => {
       const nodes = [element, ...element.querySelectorAll('img,svg,canvas')];
       return nodes.filter(node => node.getClientRects().length && getComputedStyle(node).display !== 'none'
-        && getComputedStyle(node).visibility !== 'hidden').map(node => node.getBoundingClientRect());
+        && getComputedStyle(node).visibility !== 'hidden').map(node => layoutRuntime.svgRect?.(node) || node.getBoundingClientRect());
     });
     if (!rects.length) return selected?.getBoundingClientRect();
     const left = Math.min(...rects.map(rect => rect.left)), top = Math.min(...rects.map(rect => rect.top));
@@ -904,8 +912,8 @@ const previewBridgeScript = '<script>(' + installSceneProvider.toString() + ')()
         display: styles.display,
         fontSize: styles.fontSize,
         color: styles.color,
-        width: element.matches('g[data-node]') ? (layoutRuntime.svgGeometry?.(element) || borderBox(element)).width + 'px' : styles.width,
-        height: element.matches('g[data-node]') ? (layoutRuntime.svgGeometry?.(element) || borderBox(element)).height + 'px' : styles.height,
+        width: layoutRuntime.svgGeometry?.(element) ? layoutRuntime.svgGeometry(element).width + 'px' : element.matches('g[data-node]') ? borderBox(element).width + 'px' : styles.width,
+        height: layoutRuntime.svgGeometry?.(element) ? layoutRuntime.svgGeometry(element).height + 'px' : element.matches('g[data-node]') ? borderBox(element).height + 'px' : styles.height,
         margin: styles.margin,
         padding: styles.padding,
         backgroundImage: styles.backgroundImage,

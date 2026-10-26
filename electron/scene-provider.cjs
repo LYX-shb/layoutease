@@ -1,7 +1,7 @@
 // Serialized into saved HTML as well as the editor. Read only the course's
 // explicit public state API or an exact match in its authored Figma scene list.
 function installSceneProvider() {
-  if (window.__editorSceneProvider?.version >= 4) return window.__editorSceneProvider;
+  if (window.__editorSceneProvider?.version >= 5) return window.__editorSceneProvider;
   const sceneNodes = new WeakMap();
   let sceneSource, sceneSignatures = [];
   function signature(svg) {
@@ -10,7 +10,7 @@ function installSceneProvider() {
     for (const element of [copy, ...copy.querySelectorAll('*')]) {
       // Editor layout/selection styles do not change the authored scene identity.
       for (const attribute of [...element.attributes]) {
-        if (attribute.name === 'style' || attribute.name.startsWith('data-editor-')) element.removeAttribute(attribute.name);
+        if (['style', 'display', 'visibility', 'opacity', 'hidden'].includes(attribute.name) || attribute.name.startsWith('data-editor-')) element.removeAttribute(attribute.name);
       }
     }
     return copy.outerHTML;
@@ -49,17 +49,17 @@ function installSceneProvider() {
       if (!name) name = figmaScene();
       const owner = document.querySelector('main');
       if (!owner) return;
-      const owned = owner.getAttribute('data-editor-scene-owner') === 'course-state-api';
+      const owned = ['course-state-api', 'course-state-api-v5'].includes(owner.getAttribute('data-editor-scene-owner'));
       if (typeof name !== 'string' || !name || name.length > 100) {
         if (owned) { owner.removeAttribute('data-phase'); owner.removeAttribute('data-editor-scene-owner'); }
         return;
       }
       if (!owned && ['phase', 'state', 'scene', 'step', 'page', 'slide', 'screen', 'question'].some(key => owner.hasAttribute('data-' + key))) return;
-      if (!owned) owner.setAttribute('data-editor-scene-owner', 'course-state-api');
+      if (owner.getAttribute('data-editor-scene-owner') !== 'course-state-api-v5') owner.setAttribute('data-editor-scene-owner', 'course-state-api-v5');
       if (owner.getAttribute('data-phase') !== name) owner.setAttribute('data-phase', name);
     } catch {}
   }
-  window.__editorSceneProvider = { version: 4, sync };
+  window.__editorSceneProvider = { version: 5, sync };
   let queued = false;
   function schedule() {
     if (queued) return;

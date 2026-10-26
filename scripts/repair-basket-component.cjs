@@ -1,0 +1,30 @@
+// Explicit repair for a saved basket geometry record. Keep the complete source
+// backup and reject concurrent file changes before replacing the HTML.
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const crypto = require('node:crypto');
+const { upsertLayoutDocument } = require('../electron/edit-scopes.cjs');
+const filename = path.resolve(process.argv[2] || '');
+if (!/\.html?$/i.test(filename)) throw Error('请指定课件 HTML 文件');
+const original = fs.readFileSync(filename,'utf8');
+const match = original.match(/<script\b[^>]*data-editor-layout-data[^>]*>([\s\S]*?)<\/script>/i);
+if (!match) throw Error('没有可迁移的已保存位置记录');
+const config = JSON.parse(match[1]);
+const source = config.svgPins?.find(pin => pin.nodes.length === 1 && pin.nodes[0] === '1:928');
+if (!source) throw Error('没有找到待修复的空购物篮记录；未修改文件');
+const current = { ...source.box }, crop = [0,.1369472182596291,1,.7353780313837375];
+const box = { x:current.x+current.width*crop[0],y:current.y+current.height*crop[1],width:current.width*crop[2],height:current.height*crop[3] };
+const nodes = ['component-shopping-basket'], selector = source.rootSelector+' [data-node="component-shopping-basket"]';
+config.svgPins = config.svgPins.filter(pin => !pin.nodes.some(node => ['1:928','component-shopping-basket'].includes(node)));
+for (const group of ['position','size']) config.svgPins.push({ ...source, nodes, selector, group, scope:{mode:'all',states:[]}, box:{...box} });
+config.preferences = config.preferences.filter(item => !/data-node="(?:1:928|component-shopping-basket)"/.test(item.target));
+for (const group of ['position','size']) config.preferences.push({target:selector,group,viewport:source.viewport,scope:{mode:'all',states:[]}});
+const updated=upsertLayoutDocument(original,config);
+const backupDir=fs.mkdtempSync(path.join(os.tmpdir(),'editor-basket-repair-'));
+const backup=path.join(backupDir,path.basename(filename));fs.writeFileSync(backup,original);
+const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
+if(hash(fs.readFileSync(filename))!==hash(original))throw Error('课件已被其他操作修改，未写回');
+const staging=path.join(path.dirname(filename),'.'+path.basename(filename)+'.basket-repair-'+process.pid);
+fs.writeFileSync(staging,updated);fs.renameSync(staging,filename);
+console.log(JSON.stringify({filename,backup,pins:config.svgPins.filter(pin=>pin.nodes.includes('component-shopping-basket')),sha256:hash(updated)},null,2));
