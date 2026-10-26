@@ -7,6 +7,7 @@ const { catalogEntry, discoverProjects } = require('./project-catalog.cjs');
 const { repairLegacyEditorSelectors } = require('./editor-selectors.cjs');
 const { installLayoutRuntime, upsertLayoutDocument } = require('./edit-scopes.cjs');
 const { installSceneProvider } = require('./scene-provider.cjs');
+const { installSvgSceneLayout } = require('./svg-scene-layout.cjs');
 const { watchProject } = require('./project-watch.cjs');
 const { installImageReplacementRuntime, upsertImageReplacementOverride } = require('./image-replacement.cjs');
 const { registerPageSharing } = require('./page-sharing.cjs');
@@ -97,6 +98,7 @@ const mobilePreviewBootstrap = String.raw`<script data-editor-mobile-preview>
 const previewPlaybackBootstrap = '<script data-editor-playback>(' + installPreviewPlayback.toString() + ')();</script>';
 const previewBridgeScript = '<script>(' + installSceneProvider.toString() + ')();</script>'
   + '<script>(' + installLayoutRuntime.toString() + ')({ renderer: window.__editorLayoutRuntime });</script>'
+  + '<script>(' + installSvgSceneLayout.toString() + ')();</script>'
   + '<script>(' + installImageReplacementRuntime.toString() + ')();</script>' + String.raw`<script>
 (() => {
   const { setTimeout, clearTimeout, requestAnimationFrame, cancelAnimationFrame } = window.__editorPlaybackRuntime?.native || window;
@@ -543,8 +545,9 @@ const previewBridgeScript = '<script>(' + installSceneProvider.toString() + ')()
     const rect = element.getBoundingClientRect();
     // Resize along the authored layout axes. A bee's scaleX(-1) flips its art,
     // not the direction in which its CSS width grows.
-    const matrix = parentCoordinateMatrix(element);
-    const box = borderBox(element);
+    const pinned = layoutRuntime.svgGeometry?.(element);
+    const matrix = pinned?.matrix ? new DOMMatrix([pinned.matrix.a, pinned.matrix.b, pinned.matrix.c, pinned.matrix.d, pinned.matrix.e, pinned.matrix.f]) : parentCoordinateMatrix(element);
+    const box = pinned || borderBox(element);
     const center = { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 };
     const point = (x, y) => matrix ? { x: center.x + matrix.m11 * box.width * x + matrix.m21 * box.height * y, y: center.y + matrix.m12 * box.width * x + matrix.m22 * box.height * y }
       : { x: center.x + rect.width * x, y: center.y + rect.height * y };
@@ -552,6 +555,8 @@ const previewBridgeScript = '<script>(' + installSceneProvider.toString() + ')()
   }
 
   function translationOf(element) {
+    const pinned = layoutRuntime.svgTranslation?.(element);
+    if (pinned) return { x: pinned[0] || 0, y: pinned[1] || 0 };
     const box = borderBox(element);
     const values = (getComputedStyle(element).translate || 'none').split(/\s+/);
     const length = (value, size) => (parseFloat(value) || 0) * (value?.endsWith('%') ? size / 100 : 1);
@@ -782,11 +787,12 @@ const previewBridgeScript = '<script>(' + installSceneProvider.toString() + ')()
         if (!editableScope(styleIdentity(selected, 'size'))) return;
         const style = getComputedStyle(selected);
         const liveRect = selected.getBoundingClientRect();
-        const box = selected.matches('g[data-node]') ? borderBox(selected) : null;
+        const pinned = layoutRuntime.svgGeometry?.(selected);
+        const box = pinned || (selected.matches('g[data-node]') ? borderBox(selected) : null);
         const width = box?.width || parseFloat(style.width) || liveRect.width;
         const height = box?.height || parseFloat(style.height) || liveRect.height;
         resize = { element: selected, identity: styleIdentity(selected, 'size'), pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, direction,
-          parentMatrix: parentCoordinateMatrix(selected), width, height, ratio: width / height || liveRect.width / liveRect.height,
+          parentMatrix: pinned?.matrix ? new DOMMatrix([pinned.matrix.a, pinned.matrix.b, pinned.matrix.c, pinned.matrix.d, pinned.matrix.e, pinned.matrix.f]) : parentCoordinateMatrix(selected), width, height, ratio: width / height || liveRect.width / liveRect.height,
           lockAspect: direction === 'se' && aspectLocked(selected) && !event.altKey,
           beforeLayout: JSON.stringify(layoutRuntime.snapshot()),
           before: { width: style.width, height: style.height, display: style.display }, moved: false };
@@ -898,8 +904,8 @@ const previewBridgeScript = '<script>(' + installSceneProvider.toString() + ')()
         display: styles.display,
         fontSize: styles.fontSize,
         color: styles.color,
-        width: element.matches('g[data-node]') ? borderBox(element).width + 'px' : styles.width,
-        height: element.matches('g[data-node]') ? borderBox(element).height + 'px' : styles.height,
+        width: element.matches('g[data-node]') ? (layoutRuntime.svgGeometry?.(element) || borderBox(element)).width + 'px' : styles.width,
+        height: element.matches('g[data-node]') ? (layoutRuntime.svgGeometry?.(element) || borderBox(element)).height + 'px' : styles.height,
         margin: styles.margin,
         padding: styles.padding,
         backgroundImage: styles.backgroundImage,
@@ -1473,9 +1479,13 @@ const previewBridgeScript = '<script>(' + installSceneProvider.toString() + ')()
         if (['current', 'selected'].includes(event.data.mode) && !identity.sceneContext) throw Error('无法识别当前画面，已阻止将修改应用到整个网页');
         if (event.data.mode === 'selected' && (!states.length || !states.includes(identity.sceneContext?.value))) throw Error('指定画面需要包含当前画面');
         const before = JSON.stringify(layoutRuntime.snapshot());
+        const scopeStates = ['original', 'current'].includes(event.data.mode) ? (identity.sceneContext ? [identity.sceneContext.value] : []) : event.data.mode === 'all' ? [] : states;
+        if (layoutRuntime.setSvgScope?.(element, identity, group, event.data.mode, scopeStates)) {
+          layoutChanged(before, group === 'size' ? '组件当前尺寸已固定到所选画面' : '组件当前位置已固定到所选画面');
+          select(element); return;
+        }
         const styles = legacyEditedStyles(element);
         layoutRuntime.removeScope(identity, group);
-        const scopeStates = ['original', 'current'].includes(event.data.mode) ? (identity.sceneContext ? [identity.sceneContext.value] : []) : event.data.mode === 'all' ? [] : states;
         layoutRuntime.setPreference(identity.selector, { mode: event.data.mode, states: scopeStates }, group, identity.sceneContext?.value || '');
         let affectedGroupId = '';
         if (group === 'position' && ['current', 'selected'].includes(event.data.mode)) {

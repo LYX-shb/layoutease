@@ -1,11 +1,12 @@
 // Serialized into saved HTML as well as the editor. Read only the course's
 // explicit public state API or an exact match in its authored Figma scene list.
 function installSceneProvider() {
-  if (window.__editorSceneProvider?.version >= 3) return window.__editorSceneProvider;
+  if (window.__editorSceneProvider?.version >= 4) return window.__editorSceneProvider;
   const sceneNodes = new WeakMap();
   let sceneSource, sceneSignatures = [];
   function signature(svg) {
     const copy = svg.cloneNode(true);
+    for (const wrapper of Array.from(copy.querySelectorAll('[data-editor-svg-lock]')).reverse()) wrapper.replaceWith(...wrapper.childNodes);
     for (const element of [copy, ...copy.querySelectorAll('*')]) {
       // Editor layout/selection styles do not change the authored scene identity.
       for (const attribute of [...element.attributes]) {
@@ -58,7 +59,7 @@ function installSceneProvider() {
       if (owner.getAttribute('data-phase') !== name) owner.setAttribute('data-phase', name);
     } catch {}
   }
-  window.__editorSceneProvider = { version: 3, sync };
+  window.__editorSceneProvider = { version: 4, sync };
   let queued = false;
   function schedule() {
     if (queued) return;

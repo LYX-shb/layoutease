@@ -1,4 +1,5 @@
 const { installSceneProvider } = require('./scene-provider.cjs');
+const { installSvgSceneLayout } = require('./svg-scene-layout.cjs');
 const properties = ['display', 'font-size', 'color', 'width', 'height', 'margin', 'padding', 'background-image', 'transform', 'translate'];
 const devices = ['desktop', 'tablet', 'mobilePortrait', 'mobileLandscape', 'phone'];
 
@@ -19,8 +20,18 @@ function normalizeLayoutConfig(value) {
     return { mode: input.mode, states };
   };
   if ((value.visibility?.length || 0) > 1000 || (value.shared?.length || 0) > 1000) throw new Error('公共素材记录过多');
+  if (!Array.isArray(value.svgPins || []) || (value.svgPins || []).length > 1000) throw new Error('SVG 同步记录过多或无效');
   if (!Array.isArray(value.groups || []) || (value.groups || []).length > 500 || !Array.isArray(value.anchors || []) || (value.anchors || []).length > 1000) throw new Error('组合记录过多');
   return { version: 1,
+    ...((value.svgPins || []).length ? { svgPins: value.svgPins.map(pin => {
+      if (!['position', 'size'].includes(pin.group) || !devices.includes(pin.viewport) || !Array.isArray(pin.nodes) || !pin.nodes.length || pin.nodes.length > 100
+        || pin.nodes.some(node => typeof node !== 'string' || !node || node.length > 200 || /[<>\r\n]/.test(node))
+        || !/^data-(phase|state|scene|step|page|slide|screen|question)$/.test(pin.attribute)
+        || !pin.box || !['x', 'y', 'width', 'height'].every(name => Number.isFinite(pin.box[name]) && Math.abs(pin.box[name]) < 10000)
+        || pin.box.width <= 0 || pin.box.height <= 0) throw new Error('SVG 跨画面位置与尺寸记录无效');
+      return { selector: selector(pin.selector), rootSelector: selector(pin.rootSelector), nodes: [...new Set(pin.nodes)], group: pin.group, viewport: pin.viewport,
+        ownerSelector: selector(pin.ownerSelector), attribute: pin.attribute, scope: scope(pin.scope), box: { ...pin.box } };
+    }) } : {}),
     edits: value.edits.map(edit => {
       if (!properties.includes(edit.property) || !devices.includes(edit.viewport) || typeof edit.value !== 'string' || !edit.value.trim() || edit.value.length > 3000 || /[<>{};\r\n]/.test(edit.value)) throw new Error('布局属性无效');
       let scene;
@@ -620,12 +631,13 @@ function upsertLayoutDocument(html, input) {
   const config = normalizeLayoutConfig(input);
   const savedRuntime = html.match(/<script\b[^>]*\bdata-editor-layout-runtime(?:\s|=|>)[\s\S]*?<\/script\s*>/i)?.[0];
   const cleaned = html.replace(/<script\b[^>]*\bdata-editor-layout-(?:data|runtime)(?:\s|=|>)[\s\S]*?<\/script\s*>/gi, '')
-    .replace(/<script\b[^>]*\bdata-editor-scene-runtime(?:\s|=|>)[\s\S]*?<\/script\s*>/gi, '');
-  if (!config.edits.length && !config.preferences.length && !config.visibility.length && !config.shared.length && !config.groups.length && !config.anchors.length) return cleaned;
+    .replace(/<script\b[^>]*\bdata-editor-(?:scene|svg-layout)-runtime(?:\s|=|>)[\s\S]*?<\/script\s*>/gi, '');
+  if (!config.edits.length && !config.preferences.length && !config.visibility.length && !config.shared.length && !config.groups.length && !config.anchors.length && !config.svgPins?.length) return cleaned;
   const json = JSON.stringify(config).replace(/</g, '\\u003c');
   const runtime = savedRuntime || `<script data-editor-layout-runtime data-editor-runtime-version="phone-v2">(${installLayoutRuntime.toString()})();</script>`;
   const sceneRuntime = `<script data-editor-scene-runtime>(${installSceneProvider.toString()})();</script>`;
-  const block = `${sceneRuntime}<script type="application/json" data-editor-layout-data>${json}</script>${runtime}`;
+  const svgRuntime = config.svgPins?.length ? `<script data-editor-svg-layout-runtime>(${installSvgSceneLayout.toString()})();</script>` : '';
+  const block = `${sceneRuntime}<script type="application/json" data-editor-layout-data>${json}</script>${runtime}${svgRuntime}`;
   return /<\/body>/i.test(cleaned) ? cleaned.replace(/<\/body>/i, `${block}</body>`) : cleaned + block;
 }
 

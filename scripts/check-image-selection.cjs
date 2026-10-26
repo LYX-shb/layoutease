@@ -84,6 +84,94 @@ async function check(name, selector, expected, x = .5, y = .5, altKey = false, n
   results.push({ name, pass, expected, actual });
   console.log((pass ? 'PASS ' : 'FAIL ') + name + ': ' + JSON.stringify(actual));
 }
+
+async function checkSvgSync() {
+  const original = fs.readFileSync(path.join(project, 'index.html'), 'utf8');
+  const oldRenderer = original.match(/<script\b[^>]*\bdata-editor-layout-runtime(?:\s|=|>)[\s\S]*?<\/script\s*>/i)?.[0];
+  const remember = name => { results.push({ name, pass: true }); console.log('PASS ' + name); };
+  const target = '#scene [data-node="1:508"]';
+  await page(`document.querySelector('#hand')?.getAnimations().forEach(a=>a.finish())`);
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const selection = await pick(target, .03, .96, attempt > 0);
+    if (selection.selector && await page(`document.querySelector(${JSON.stringify(selection.selector)})===document.querySelector(${JSON.stringify(target)})`)) break;
+  }
+  assert.ok(await ui(`window.__selection?.selector.includes('1:508')`), 'select the user-reported panel');
+  await ui(`window.__svgErrors=[];window.addEventListener('message',e=>{if(e.data?.type==='scope-error')window.__svgErrors.push(e.data.message)})`);
+  const command = async (group, mode = 'all', states = []) => {
+    await ui(`document.querySelector('iframe').contentWindow.postMessage({source:'theme-unit-editor',type:'set-edit-scope',id:window.__selection.id,group:${JSON.stringify(group)},mode:${JSON.stringify(mode)},states:${JSON.stringify(JSON.stringify(states))}},'*')`);
+    await delay(80);
+    assert.deepEqual(await ui('window.__svgErrors'), []);
+  };
+  await command('position'); await command('size');
+  assert.equal(await page('window.__editorLayoutRuntime.snapshot().svgPins.length'), 2);
+  remember('choosing all scenes snapshots actual position and size without requiring a drag');
+  const read = () => page(`(()=>{const p=window.__editorLayoutRuntime.snapshot().svgPins[0],e=document.querySelector(p.selector),r=e.getBoundingClientRect(),s=e.ownerSVGElement.getBoundingClientRect();return {x:(r.left-s.left)/s.width,y:(r.top-s.top)/s.height,width:r.width/s.width,height:r.height/s.height}})()`);
+  const expected = await read();
+  async function allScenes(label) {
+    for (let index = 0; index < 6; index++) {
+      await page(`document.querySelector('#scene').innerHTML=window.FIGMA.scenes[${index}]`);
+      await until(() => page(`document.querySelector('main').dataset.phase==='figma-scene-${index+1}'`), 'recognize SVG scene ' + index);
+      await delay(60);
+      const rect = await read();
+      for (const key of Object.keys(expected)) assert.ok(Math.abs(rect[key]-expected[key])<.0002, label+' scene '+(index+1)+' '+key+': '+JSON.stringify({rect,expected}));
+    }
+    remember(label);
+  }
+  await allScenes('different node IDs retain identical visual geometry across all six scenes');
+  const savedExpected = { ...expected };
+  await click('保存');
+  await until(() => ui(`!document.querySelector('.save-state.dirty')`), 'SVG pins saved');
+  const saved = fs.readFileSync(path.join(project,'index.html'),'utf8');
+  if (oldRenderer) assert.ok(saved.includes(oldRenderer), 'the existing saved renderer remains byte-for-byte intact');
+  assert.match(saved, /data-editor-svg-layout-runtime/);
+  await click('刷新预览');
+  await until(() => page(`document.readyState==='complete'&&window.__editorLayoutRuntime.snapshot().svgPins?.length===2`), 'SVG pins restored');
+  await allScenes('saved old-renderer pages retain geometry after reload and scene reconstruction');
+  const selector = await page('window.__editorLayoutRuntime.snapshot().svgPins[0].selector');
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const selection = await pick(selector, .03, .96, attempt > 0);
+    if (selection.selector && await page(`document.querySelector(${JSON.stringify(selection.selector)})===document.querySelector(${JSON.stringify(selector)})`)) break;
+  }
+  const rawBefore = await page(`document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect().toJSON()`);
+  await page(`(()=>{const e=document.querySelector('[data-move-tool]'),r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:9,clientX:x,clientY:y}));document.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:9,clientX:x+70,clientY:y+35}));document.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:9,clientX:x+70,clientY:y+35}))})()`);
+  await delay(80);
+  const rawAfter = await page(`document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect().toJSON()`);
+  assert.ok(Math.abs(rawAfter.x-rawBefore.x-70)<.3 && Math.abs(rawAfter.y-rawBefore.y-35)<.3, 'locked SVG component still follows a drag');
+  await page(`(()=>{const e=document.querySelector('[data-resize-direction="e"]'),r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:10,clientX:x,clientY:y}));document.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:10,clientX:x+80,clientY:y}));document.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:10,clientX:x+80,clientY:y}))})()`);
+  await delay(80);
+  const resized = await page(`document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect().toJSON()`);
+  assert.ok(Math.abs(resized.width-rawAfter.width-80)<.3, 'locked SVG component still follows a width handle');
+  Object.assign(expected, await read());
+  await allScenes('dragging and resizing a synchronized object updates all six scenes');
+  await click('撤销');
+  await delay(80);
+  Object.assign(expected, await read());
+  assert.ok(Math.abs(expected.width-rawAfter.width/1440)<.001, 'undo restores the previous shared width');
+  await allScenes('undo restores shared geometry across all six scenes');
+  const allPins = await page('window.__editorLayoutRuntime.snapshot()');
+  await page(`(()=>{const p=window.__editorLayoutRuntime.snapshot().svgPins[0],e=document.querySelector(p.selector);window.__editorLayoutRuntime.setSvgScope(e,{selector:'div#scene > svg [data-node='+JSON.stringify(e.getAttribute('data-node'))+']',sceneContext:{ownerSelector:'main#orientation',attribute:'data-phase',value:'figma-scene-6'}},'position','selected',['figma-scene-1','figma-scene-6'])})()`);
+  await page(`document.querySelector('#scene').innerHTML=window.FIGMA.scenes[1]`); await delay(100);
+  assert.ok(Math.abs((await read()).x-expected.x)>.01, 'unselected scene keeps its authored position');
+  await page(`window.__editorLayoutRuntime.restore(${JSON.stringify(allPins)})`);
+  remember('narrowing a position lock leaves unselected scenes independent');
+  const standalone = new electron.BrowserWindow({ show:false, width:1440, height:900, webPreferences:{backgroundThrottling:false} });
+  try {
+    await standalone.loadFile(path.join(project, 'index.html'));
+    for (let index=0;index<6;index++) {
+      await standalone.webContents.executeJavaScript(`document.querySelector('#scene').innerHTML=window.FIGMA.scenes[${index}]`);
+      await delay(90);
+      const rect = await standalone.webContents.executeJavaScript(`(()=>{const p=window.__editorLayoutRuntime.snapshot().svgPins[0],e=document.querySelector(p.selector),r=e.getBoundingClientRect(),s=e.ownerSVGElement.getBoundingClientRect();return {x:(r.left-s.left)/s.width,y:(r.top-s.top)/s.height,width:r.width/s.width,height:r.height/s.height}})()`);
+      for (const key of Object.keys(savedExpected)) assert.ok(Math.abs(rect[key]-savedExpected[key])<.0002, 'standalone scene '+index+' '+key);
+    }
+    assert.equal(await standalone.webContents.executeJavaScript(`!!document.querySelector('[data-editor-tools]')`),false);
+    remember('standalone HTML keeps all six scenes fixed without editor bridge scripts');
+  } finally { standalone.destroy(); }
+  const directory = path.resolve(__dirname, '../release/svg-sync-check');
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'result.json'), JSON.stringify({ project, results }, null, 2));
+  fs.writeFileSync(path.join(directory, 'screenshot.png'), (await win.webContents.capturePage()).toPNG());
+  console.log(results.length + '/' + results.length + ' SVG synchronization checks passed');
+}
 electron.app.whenReady().then(async () => {
   const timeout = setTimeout(() => electron.app.exit(1), 90000);
   try {
@@ -95,6 +183,7 @@ electron.app.whenReady().then(async () => {
     await until(() => frame() && page(`innerWidth===1440 && document.readyState==='complete'`), 'desktop viewport');
     await delay(100);
     await prepare();
+    if (process.argv.includes('--svg-sync')) { await checkSvgSync(); clearTimeout(timeout); win.destroy(); electron.app.exit(0); return; }
     if (course && await page(`!!window.FIGMA?.scenes`)) {
       await until(() => page(`document.querySelector('main').dataset.phase==='figma-scene-1'`), 'authored Figma scene recognized');
       await page(`document.querySelector('#hand')?.getAnimations().forEach(animation=>animation.finish())`);

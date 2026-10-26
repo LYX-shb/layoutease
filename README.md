@@ -10,7 +10,7 @@ Windows 桌面应用，用于打开和微调 HTML、CSS、JavaScript 交互学�
 - 编辑与测试模式、保存、撤销/重做、项目版本快照和恢复。
 - 基础交互配置，以及用户自带 API 的 AI 代码修改流程。
 
-当前版本为 `0.1.7`，修复了 SVG 场景总是选中整页、选框拦截后续点击的问题，并支持内部独立素材的位置和尺寸调整。61 项自动化测试及课件副本的 19 项 Electron 检查通过；真实 AI API 验收仍待完成，详见 [本次修复与验证记录](docs/32-svg-object-selection.md)。
+当前版本为 `0.1.8`，支持将 SVG 组件当前的位置和尺寸固定到所有或指定画面，通过对应素材识别不同画面的节点编号。64 项自动化测试、19 项元素选择回归检查及 7 项跨画面同步检查通过；真实 AI API 验收仍待完成，详见 [本次修复与验证记录](docs/33-svg-scene-geometry.md)。
 
 Windows 用户可从 [GitHub Releases](https://github.com/LYX-shb/theme-unit-editor/releases/latest) 下载安装包。更新前保存修改并退出旧版，再运行安装程序。
 
@@ -33,7 +33,7 @@ npm run typecheck
 npm run package:win
 ```
 
-安装包输出到 `release/Theme-Unit-Editor-0.1.7-Setup.exe`。该目录不提交到 Git，安装包通过 GitHub Releases 分发。安装包尚未代码签名，具体说明见 [Windows 安装包文档](docs/11-windows-installer.md)。
+安装包输出到 `release/Theme-Unit-Editor-0.1.8-Setup.exe`。该目录不提交到 Git，安装包通过 GitHub Releases 分发。安装包尚未代码签名，具体说明见 [Windows 安装包文档](docs/11-windows-installer.md)。
 
 ## 开发文档
 
