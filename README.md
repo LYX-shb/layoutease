@@ -1,14 +1,16 @@
-# 主题单元编辑器
+# LayoutEase
+
+*Drag. Adjust. Save.*
 
 **快速选中、拖动和调整网页组件，减少查找代码与反复调用 AI 的时间。**
 
-主题单元编辑器是一款面向已有 HTML 页面的 Windows 可视化编辑工具。打开本地项目，在预览中选中要调整的文字、图片或可识别的 SVG 组件，直接拖动位置、调整大小和样式，再保存回项目。
+LayoutEase 是一款面向已有 HTML 页面的 Windows 可视化编辑工具。打开本地项目，在预览中选中要调整的文字、图片或可识别的 SVG 组件，直接拖动位置、调整大小和样式，再保存回项目。
 
 常见的位置、尺寸、文字和图片修改，可以直接在画面上完成，不用先在源码中寻找对应元素，也不必每次都借助 AI。适合在已有页面上快速试调、查看效果、继续修改，提高日常调整效率。
 
 例如：把按钮向右挪一点、缩小一张图片、修改提示文字，或暂停互动过程后调整此时出现的对象。
 
-[下载安装](https://github.com/LYX-shb/theme-unit-editor/releases/latest) · [详细功能](#详细功能) · [适用场景](#适用场景) · [使用范围与限制](#使用范围与限制) · [更新记录](CHANGELOG.md)
+[下载安装](https://github.com/LYX-shb/layoutease/releases/latest) · [详细功能](#详细功能) · [适用场景](#适用场景) · [使用范围与限制](#使用范围与限制) · [更新记录](CHANGELOG.md)
 
 ## 详细功能
 
@@ -106,7 +108,7 @@
 
 当前提供 **Windows x64** 安装包。
 
-1. 在 [Releases](https://github.com/LYX-shb/theme-unit-editor/releases/latest) 下载名称以 `Setup.exe` 结尾的安装包并安装。
+1. 在 [Releases](https://github.com/LYX-shb/layoutease/releases/latest) 下载名称以 `Setup.exe` 结尾的安装包并安装。
 2. 打开编辑器，点击“浏览文件夹”，选择包含入口 HTML 的项目；也可以从文件菜单打开 HTML 文件。
 3. 在“编辑”模式中选中元素，通过拖动或右侧属性面板调整。
 4. 需要操作页面时切换到“测试”；到达目标画面后点击“立即定格”，继续编辑。
@@ -138,8 +140,8 @@
 安装 Node.js、npm 和 Git 后执行：
 
 ```powershell
-git clone https://github.com/LYX-shb/theme-unit-editor.git
-cd theme-unit-editor
+git clone https://github.com/LYX-shb/layoutease.git
+cd layoutease
 npm ci
 npm run dev
 ```
@@ -182,4 +184,4 @@ docs/        技术方案、功能说明和维护记录
 
 ## 反馈问题
 
-请在 [Issues](https://github.com/LYX-shb/theme-unit-editor/issues) 中说明应用版本、操作步骤、预期结果和实际结果。提供示例时，优先使用去除私人素材与密钥的最小项目。
+请在 [Issues](https://github.com/LYX-shb/layoutease/issues) 中说明应用版本、操作步骤、预期结果和实际结果。提供示例时，优先使用去除私人素材与密钥的最小项目。

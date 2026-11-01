@@ -1,6 +1,8 @@
 # Windows 安装包
 
-当前版本为 0.1.10（2026-10-29），修复 11.2 中使用 SVG 组 ID 的组件无法独立选中和移动的问题。当前安装包为 `release/Theme-Unit-Editor-0.1.10-Setup.exe`，已在本机覆盖安装，通过 [GitHub Releases](https://github.com/LYX-shb/theme-unit-editor/releases/tag/v0.1.10) 分发。功能与检查记录见 [SVG ID 组件编辑修复](./35-svg-id-component-editing.md)。下文包含早期版本的安装验证记录。
+项目现名为 **LayoutEase**。后续构建的产品名、快捷方式名均为 LayoutEase，安装包命名为 `LayoutEase-<版本号>-Setup.exe`。下文的 0.1.10 安装包是更名前发布的历史产物，文件名与包内显示名保留原样。
+
+当前版本为 0.1.10（2026-10-29），修复 11.2 中使用 SVG 组 ID 的组件无法独立选中和移动的问题。当前安装包为 `release/Theme-Unit-Editor-0.1.10-Setup.exe`，已在本机覆盖安装，通过 [GitHub Releases](https://github.com/LYX-shb/layoutease/releases/tag/v0.1.10) 分发。功能与检查记录见 [SVG ID 组件编辑修复](./35-svg-id-component-editing.md)。下文包含早期版本的安装验证记录。
 
 ## 构建
 

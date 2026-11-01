@@ -1251,7 +1251,7 @@ function EditorView({ project, onClose, onOpen, catalog, scanning, catalogMessag
       <header ref={toolbarRef} className="editor-toolbar">
         <div className="toolbar-project-controls">
         <div className="project-picker">
-          <span className="toolbar-mark">单</span>
+          <span className="toolbar-mark" aria-label="LayoutEase" title="LayoutEase">L</span>
           <div className="project-select-wrap"><span className="project-current-name" aria-hidden="true">{hasProject ? localProjectLabel(project.rootPath, project.name) : scanning ? '正在发现本地项目…' : '请选择本地项目'}</span><EditorIcon name="chevron" />
           <select id="current-project" aria-label="当前项目" value={project.catalogKey || ''} disabled={Boolean(aiStage)} onChange={(event) => { const key = event.target.value; if (key) requestSwitch(() => { void onSelectProject(key); }); }}>
             <option value="" disabled>{scanning ? '正在发现本地项目…' : '请选择本地项目'}</option>

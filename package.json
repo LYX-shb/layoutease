@@ -3,7 +3,7 @@
   "type": "module",
   "version": "0.1.10",
   "private": true,
-  "description": "Windows desktop editor for interactive learning web units",
+  "description": "LayoutEase - a visual editor for existing HTML pages",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "node scripts/dev.cjs",
@@ -15,7 +15,7 @@
   },
   "build": {
     "appId": "com.themeunit.editor",
-    "productName": "主题单元编辑器",
+    "productName": "LayoutEase",
     "asar": true,
     "npmRebuild": false,
     "electronDist": "node_modules/electron/dist",
@@ -43,7 +43,7 @@
           ]
         }
       ],
-      "artifactName": "Theme-Unit-Editor-${version}-Setup.${ext}"
+      "artifactName": "LayoutEase-${version}-Setup.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -51,7 +51,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "主题单元编辑器"
+      "shortcutName": "LayoutEase"
     }
   },
   "devDependencies": {
