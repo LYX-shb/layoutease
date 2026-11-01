@@ -10,7 +10,7 @@ Windows 桌面应用，用于打开和微调 HTML、CSS、JavaScript 交互学�
 - 编辑与测试模式、保存、撤销/重做、项目版本快照和恢复。
 - 基础交互配置，以及用户自带 API 的 AI 代码修改流程。
 
-当前版本为 `0.1.9`，补充购物篮不同状态的组件识别、篮内食品同步，以及动态标题覆盖层下的素材选择。67 项自动化测试、19 项元素选择回归检查及 8 项跨画面同步检查通过；真实 AI API 验收仍待完成，详见 [本次修复与验证记录](docs/34-basket-component-and-native-scene.md)。
+当前版本为 `0.1.10`，支持按 SVG 组 ID 识别独立组件，修复 11.2 课件点击后选中整幅画面、无法移动的问题。70 项自动化测试、19 项元素选择回归及 9 项 11.2 编辑检查通过；真实 AI API 验收仍待完成，详见 [本次修复与验证记录](docs/35-svg-id-component-editing.md)。
 
 Windows 用户可从 [GitHub Releases](https://github.com/LYX-shb/theme-unit-editor/releases/latest) 下载安装包。更新前保存修改并退出旧版，再运行安装程序。
 
@@ -33,7 +33,7 @@ npm run typecheck
 npm run package:win
 ```
 
-安装包输出到 `release/Theme-Unit-Editor-0.1.9-Setup.exe`。该目录不提交到 Git，安装包通过 GitHub Releases 分发。安装包尚未代码签名，具体说明见 [Windows 安装包文档](docs/11-windows-installer.md)。
+安装包输出到 `release/Theme-Unit-Editor-0.1.10-Setup.exe`。该目录不提交到 Git，安装包通过 [GitHub Releases](https://github.com/LYX-shb/theme-unit-editor/releases/tag/v0.1.10) 分发。安装包尚未代码签名，具体说明见 [Windows 安装包文档](docs/11-windows-installer.md)。
 
 ## 开发文档
 

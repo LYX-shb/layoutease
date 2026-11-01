@@ -48,7 +48,8 @@ const replacement = {
 };
 const originalLoad = Module._load;
 Module._load = function(name, parent, main) { return name === 'electron' ? replacement : originalLoad.call(this, name, parent, main); };
-try { require('../electron/main.cjs'); } finally { Module._load = originalLoad; }
+const installedAsar = process.argv.find(arg => arg.startsWith('--installed='))?.slice(12);
+try { require(installedAsar ? path.join(installedAsar, 'electron/main.cjs') : '../electron/main.cjs'); } finally { Module._load = originalLoad; }
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const ui = code => win.webContents.executeJavaScript(code);
 function frame() { return win.webContents.mainFrame.frames.find(item => item.url.startsWith('editor-project://')); }
@@ -207,6 +208,64 @@ async function checkSvgSync() {
   fs.writeFileSync(path.join(directory, 'screenshot.png'), (await win.webContents.capturePage()).toPNG());
   console.log(results.length + '/' + results.length + ' SVG synchronization checks passed');
 }
+
+async function checkIdSvg() {
+  const remember = name => { results.push({name,pass:true}); console.log('PASS '+name); };
+  const rect = selector => page(`document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect().toJSON()`);
+  const nativeDrag = async (selector,dx,dy) => {
+    win.focus();win.webContents.focus();
+    await page(`window.__idEvents=[];if(!window.__idWatch){window.__idWatch=true;for(const type of ['pointerdown','pointermove','pointerup','lostpointercapture'])window.addEventListener(type,e=>window.__idEvents.push({type,detail:e.detail,pointer:e.pointerId,x:e.clientX,y:e.clientY,target:e.target.outerHTML?.slice(0,100)}),true)}`);
+    const r=await rect(selector);
+    const point=await ui(`(()=>{const r=document.querySelector('iframe').getBoundingClientRect();return {x:r.left+${r.x+r.width/2}*r.width/1440,y:r.top+${r.y+r.height/2}*r.height/900,sx:r.width/1440,sy:r.height/900}})()`);
+    if(!win.webContents.debugger.isAttached())win.webContents.debugger.attach('1.3');
+    const send=(type,x,y)=>win.webContents.debugger.sendCommand('Input.dispatchMouseEvent',{type,x,y,button:'left',buttons:type==='mouseReleased'?0:1,clickCount:1});
+    await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent',{type:'mouseMoved',x:point.x,y:point.y});await delay(100);await send('mousePressed',point.x,point.y);await delay(80);
+    for(let i=1;i<=5;i++){await send('mouseMoved',point.x+dx*point.sx*i/5,point.y+dy*point.sy*i/5);await delay(25);}
+    await send('mouseReleased',point.x+dx*point.sx,point.y+dy*point.sy);await delay(70);
+    return r;
+  };
+  await click('测试');await until(()=>page(`!!document.querySelector('#bank-card-0')&&document.querySelector('#stage').dataset.state==='placing'`),'placing scene');
+  await delay(1100);await click('编辑');await prepare();
+  await check('SVG ID component selected independently through its child artwork','#bank-card-0','#bank-card-0',.5,.5,false,true);
+  assert.ok(results.at(-1).pass,'ID-based SVG must select its component, not the full scene');
+  const other=await rect('#bank-card-1');
+  const before=await nativeDrag('#bank-card-0',38,24),after=await rect('#bank-card-0');
+  assert.ok(Math.abs(after.x-before.x-38)<1&&Math.abs(after.y-before.y-24)<1,JSON.stringify({before,after,events:await page('window.__idEvents')}));
+  assert.deepEqual(await rect('#bank-card-1'),other);remember('native mouse moves only the selected clipped component through stage scaling');
+  await click('撤销');await until(async()=>Math.abs((await rect('#bank-card-0')).x-before.x)<1,'undo restores component');remember('one undo restores the original component position');
+  await click('重做');await until(async()=>Math.abs((await rect('#bank-card-0')).x-after.x)<1,'redo restores component');
+  await click('保存');await until(()=>ui(`!document.querySelector('.save-state.dirty')`),'ID component saved');
+  await click('刷新预览');await until(()=>page(`!!document.querySelector('#bank-card-0')&&document.readyState==='complete'`),'saved component reload');
+  await until(async()=>Math.abs((await rect('#bank-card-0')).x-after.x)<1,'saved movement restored');remember('component position survives saving and rebuilding the SVG');
+  await click('测试');await delay(250);
+  await page(`document.querySelector('[aria-label="重来"]').dispatchEvent(new MouseEvent('click',{bubbles:true}))`);
+  await delay(250);
+  await page(`for(let i=0;i<6;i++){const e=document.querySelector('#bank-card-'+i);e.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));}`);
+  await until(()=>page(`document.querySelector('#stage').dataset.state==='question'`),'native course advances after placing six gap cards');
+  await click('编辑');await prepare();
+  await check('question card SVG ID selects the whole card','#n-1-12','#n-1-12',.5,.5,false,true);assert.ok(results.at(-1).pass);
+  const cardBefore=await nativeDrag('#n-1-12',-32,19),cardAfter=await rect('#n-1-12');
+  assert.ok(Math.abs(cardAfter.x-cardBefore.x+32)<1&&Math.abs(cardAfter.y-cardBefore.y-19)<1,JSON.stringify({cardBefore,cardAfter}));remember('question card moves without consuming or placing a course answer');
+  const scale=await page(`(()=>{const e=document.querySelector('#n-1-12');return e.parentElement.getScreenCTM().a})()`);
+  await page(`(()=>{const h=document.querySelector('[data-resize-direction="e"]'),r=h.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;h.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,button:0,pointerId:21,clientX:x,clientY:y}));document.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:21,clientX:x+${20*scale},clientY:y}));document.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,pointerId:21,clientX:x+${20*scale},clientY:y}))})()`);
+  await delay(80);const resized=await rect('#n-1-12');
+  assert.ok(Math.abs(resized.width-cardAfter.width-20*scale)<1,JSON.stringify({cardAfter,resized,scale}));remember('SVG group resize changes the painted card width');
+  await until(()=>ui(`!!document.querySelector('.save-state.dirty')`),'question movement dirty');
+  await click('保存');await until(()=>ui(`!document.querySelector('.save-state.dirty')`),'question saved');
+  await click('刷新预览');await until(()=>page(`!!document.querySelector('#bank-card-0')&&document.readyState==='complete'`),'question edit reload');
+  assert.ok(await page(`getComputedStyle(document.querySelector('#n-1-12')).scale==='none'`),'question size does not leak into the placing scene');
+  await click('测试');await delay(300);
+  await page(`for(let i=0;i<6;i++)document.querySelector('#bank-card-'+i).dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));`);
+  await until(()=>page(`document.querySelector('#stage').dataset.state==='question'`),'question rebuilt');
+  await until(async()=>Math.abs((await rect('#n-1-12')).width-resized.width)<1,'question dimensions restored');
+  await click('编辑');await prepare();
+  await check('saved question card remains selectable after native scene rebuild','#n-1-12','#n-1-12',.5,.5,false,true);assert.ok(results.at(-1).pass);
+  remember('question movement and size survive reload without affecting the placing scene');
+  const directory=path.resolve(__dirname,'../release/svg-id-check');fs.mkdirSync(directory,{recursive:true});
+  fs.writeFileSync(path.join(directory,'screenshot.png'),(await win.webContents.capturePage()).toPNG());
+  fs.writeFileSync(path.join(directory,'result.json'),JSON.stringify({course,project,results},null,2));
+  console.log(results.length+'/'+results.length+' SVG ID checks passed');
+}
 electron.app.whenReady().then(async () => {
   const timeout = setTimeout(() => electron.app.exit(1), 90000);
   try {
@@ -218,10 +277,11 @@ electron.app.whenReady().then(async () => {
     await until(() => frame() && page(`innerWidth===1440 && document.readyState==='complete'`), 'desktop viewport');
     await delay(100);
     await prepare();
+    if (process.argv.includes('--id-svg')) { await checkIdSvg(); clearTimeout(timeout); win.destroy(); electron.app.exit(0); return; }
     if (process.argv.includes('--svg-sync')) { await checkSvgSync(); clearTimeout(timeout); win.destroy(); electron.app.exit(0); return; }
     if (course && await page(`!!window.FIGMA?.scenes`)) {
       await until(() => page(`document.querySelector('main').dataset.phase==='figma-scene-1'`), 'authored Figma scene recognized');
-      await page(`document.querySelector('#hand')?.getAnimations().forEach(animation=>animation.finish())`);
+      await page(`document.querySelector('#hand')?.getAnimations().forEach(animation=>animation.cancel())`);
       await check('Figma biscuit selects its own node below transparent hit area', '#scene [data-node="1:523"]', '#scene [data-node="1:523"]');
       await check('Figma candy selects a different node with an ordinary click', '#scene [data-node="1:521"]', '#scene [data-node="1:521"]');
       await check('native mouse selects the biscuit artwork', '#scene [data-node="1:523"]', '#scene [data-node="1:523"]', .5, .5, false, true);
@@ -253,7 +313,7 @@ electron.app.whenReady().then(async () => {
       await page(`document.querySelector('#scene').innerHTML=window.FIGMA.scenes[0]`);
       await until(() => page(`document.querySelector('main').dataset.phase==='figma-scene-1'&&getComputedStyle(document.querySelector('#scene [data-node="1:523"]')).width==='500px'`), 'returning scene restores its saved edit');
       results.push({name:'SVG edits remain isolated to their authored scene',pass:true});
-      await page(`document.querySelector('#hand')?.getAnimations().forEach(animation=>animation.finish())`);
+      await page(`document.querySelector('#hand')?.getAnimations().forEach(animation=>animation.cancel())`);
       await check('saved SVG object remains independently selectable', '#scene [data-node="1:523"]', '#scene [data-node="1:523"]', .15, .15);
       await delay(100);
       assert.ok(await page(`!!document.querySelector('[data-selection-frame]')`), 'SVG object selection remains available after rendering');

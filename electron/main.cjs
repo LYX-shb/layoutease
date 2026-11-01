@@ -157,6 +157,15 @@ const previewBridgeScript = '<script>(' + installCourseComponents.toString() + '
     return resizeLocks.get(cssPath(element)) ?? (element.tagName === 'IMG');
   }
 
+  function isSceneViewport(element) {
+    if (!element.matches('svg:not([data-editor-component])')) return false;
+    if (element.querySelectorAll('[data-node]').length > 1) return true;
+    // Other exporters keep component identities as SVG group IDs instead of
+    // data-node. Small multi-path icons remain one editable image.
+    const width = element.viewBox?.baseVal?.width || parseFloat(element.getAttribute('width')) || 0;
+    return width >= 500 && element.querySelectorAll('g[id],g[role="button"],g[data-editor-id]').length > 1;
+  }
+
   function graphicRoot(element) {
     const component = element.closest('svg[data-editor-component]');
     if (component) return component;
@@ -164,8 +173,9 @@ const previewBridgeScript = '<script>(' + installCourseComponents.toString() + '
     if (!svg) return element;
     // Figma scenes contain many independent authored objects. Keep their node
     // groups selectable, while compact icons without those groups stay atomic.
-    const node = element.closest('[data-node]');
-    if (node && svg.contains(node) && svg.querySelectorAll('[data-node]').length > 1) return node;
+    const control = element.closest('g[role="button"]');
+    const node = control || element.closest('[data-node],g[id],g[data-editor-id]');
+    if (node && svg.contains(node) && isSceneViewport(svg)) return node;
     return svg;
   }
 
@@ -173,8 +183,7 @@ const previewBridgeScript = '<script>(' + installCourseComponents.toString() + '
     // Interaction target picking follows the authored controls. Image editing
     // instead follows the painted layers, including assets below empty hit areas.
     if (targetPicking) return event.target;
-    const isSceneViewport = element => element.matches('svg:not([data-editor-component])') && element.querySelectorAll('[data-node]').length > 1;
-    const isGraphic = (element) => !isSceneViewport(element) && (element.matches('img, svg, canvas, g[data-node]') || getComputedStyle(element).backgroundImage !== 'none');
+    const isGraphic = (element) => !isSceneViewport(element) && (element.matches('img, svg, canvas, g[data-node],g[id],g[role="button"]') || getComputedStyle(element).backgroundImage !== 'none');
     const visibleAtPoint = (element) => {
       if (!element.getClientRects().length || element.closest('[data-editor-tools]')) return false;
       const rect = element.getBoundingClientRect();
@@ -796,7 +805,7 @@ const previewBridgeScript = '<script>(' + installCourseComponents.toString() + '
         const style = getComputedStyle(selected);
         const liveRect = selected.getBoundingClientRect();
         const pinned = layoutRuntime.svgGeometry?.(selected);
-        const box = pinned || (selected.matches('g[data-node]') ? borderBox(selected) : null);
+        const box = pinned || (selected.matches('g') ? borderBox(selected) : null);
         const width = box?.width || parseFloat(style.width) || liveRect.width;
         const height = box?.height || parseFloat(style.height) || liveRect.height;
         resize = { element: selected, identity: styleIdentity(selected, 'size'), pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, direction,
@@ -912,8 +921,8 @@ const previewBridgeScript = '<script>(' + installCourseComponents.toString() + '
         display: styles.display,
         fontSize: styles.fontSize,
         color: styles.color,
-        width: layoutRuntime.svgGeometry?.(element) ? layoutRuntime.svgGeometry(element).width + 'px' : element.matches('g[data-node]') ? borderBox(element).width + 'px' : styles.width,
-        height: layoutRuntime.svgGeometry?.(element) ? layoutRuntime.svgGeometry(element).height + 'px' : element.matches('g[data-node]') ? borderBox(element).height + 'px' : styles.height,
+        width: layoutRuntime.svgGeometry?.(element) ? layoutRuntime.svgGeometry(element).width + 'px' : element.matches('g') ? borderBox(element).width + 'px' : styles.width,
+        height: layoutRuntime.svgGeometry?.(element) ? layoutRuntime.svgGeometry(element).height + 'px' : element.matches('g') ? borderBox(element).height + 'px' : styles.height,
         margin: styles.margin,
         padding: styles.padding,
         backgroundImage: styles.backgroundImage,
@@ -1210,8 +1219,9 @@ const previewBridgeScript = '<script>(' + installCourseComponents.toString() + '
       marquee = null;
       try { if (document.documentElement.hasPointerCapture(pointerId)) document.documentElement.releasePointerCapture(pointerId); } catch {}
       if (box.right - box.left > 4 && box.bottom - box.top > 4) {
-        const candidates = Array.from(document.querySelectorAll('body *')).filter(element => {
+        const candidates = [...new Set(Array.from(document.querySelectorAll('body *')).map(graphicRoot))].filter(element => {
           if (element.closest('[data-editor-tools]') || ['SCRIPT', 'STYLE', 'MAIN'].includes(element.tagName) || !element.getClientRects().length) return false;
+          if (isSceneViewport(element)) return false;
           const rect = element.getBoundingClientRect();
           const visibleLeft = Math.max(0, rect.left), visibleTop = Math.max(0, rect.top);
           const visibleRight = Math.min(innerWidth, rect.right), visibleBottom = Math.min(innerHeight, rect.bottom);
@@ -1222,7 +1232,7 @@ const previewBridgeScript = '<script>(' + installCourseComponents.toString() + '
           if (overlap / visibleArea < 0.45) return false;
           const style = getComputedStyle(element);
           if (style.display === 'none' || style.visibility === 'hidden' || Number.parseFloat(style.opacity) <= 0) return false;
-          return element.matches('img,svg,canvas,button,[data-editor-id]') || style.backgroundImage !== 'none' || (element.children.length === 0 && Boolean(element.textContent.trim()));
+          return element.matches('img,svg,canvas,button,g[id],g[data-node],g[role="button"],[data-editor-id]') || style.backgroundImage !== 'none' || (element.children.length === 0 && Boolean(element.textContent.trim()));
         });
         const members = candidates.filter(element => !candidates.some(other => other !== element && other.contains(element))).slice(0, 50);
         if (members.length) { select(members[0], { members }); marqueeMode = false; send('marquee-mode', { enabled: false }); send('marquee-result', { count: selectedElements.length }); }

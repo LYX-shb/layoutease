@@ -3,8 +3,8 @@ const assert = require('node:assert/strict');
 const { JSDOM } = require('jsdom');
 const { installLayoutRuntime } = require('../electron/edit-scopes.cjs');
 
-test('SVG object sizing scales its painted bounds once and restores authored styles on undo', t => {
-  const dom = new JSDOM('<main id="stage" data-phase="one"><svg><g data-node="biscuit" style="scale:1;transform-origin:center"><rect width="200" height="100"/></g><g data-node="candy"/></svg></main>', { runScripts: 'outside-only' });
+for (const identityAttribute of ['data-node', 'id']) test('SVG '+identityAttribute+' object sizing scales its painted bounds once and restores authored styles on undo', t => {
+  const dom = new JSDOM('<main id="stage" data-phase="one"><svg><g '+identityAttribute+'="biscuit" style="scale:1;transform-origin:center"><rect width="200" height="100"/></g><g '+identityAttribute+'="candy"/></svg></main>', { runScripts: 'outside-only' });
   t.after(() => dom.window.close());
   const w = dom.window, d = w.document;
   w.matchMedia = () => ({ matches: false });
@@ -13,11 +13,12 @@ test('SVG object sizing scales its painted bounds once and restores authored sty
   const runtime = w.__editorLayoutRuntime;
   runtime.setViewport('desktop');
   const before = runtime.snapshot();
-  const identity = { selector: 'g[data-node="biscuit"]', baseStyleSelector: 'g[data-node="biscuit"]',
-    styleSelector: 'main[data-phase="one"] g[data-node="biscuit"]', editScope: { mode: 'current', states: ['one'] },
+  const selector = 'g['+identityAttribute+'="biscuit"]';
+  const identity = { selector, baseStyleSelector: selector,
+    styleSelector: 'main[data-phase="one"] '+selector, editScope: { mode: 'current', states: ['one'] },
     sceneContext: { ownerSelector: 'main#stage', attribute: 'data-phase', value: 'one' } };
   runtime.writeMany(identity, { width: '300px', height: '80px' });
-  const biscuit = d.querySelector('[data-node="biscuit"]'), candy = d.querySelector('[data-node="candy"]');
+  const biscuit = d.querySelector(selector), candy = d.querySelector('['+identityAttribute+'="candy"]');
   assert.equal(biscuit.style.scale, '1.5 0.8');
   assert.equal(candy.style.scale, '');
   runtime.apply(); runtime.apply();

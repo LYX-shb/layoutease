@@ -103,6 +103,23 @@ test('an ordinary click escapes a scene-sized frame and selects an authored SVG 
   assert.equal(e.messages.filter(item => item.type === 'layout-changed').length, 0, 'a slightly unsteady click never moves or dirties artwork');
 });
 
+test('ID-based SVG artwork selects an authored component and keeps runtime control parts together', t => {
+  const e = environment('<main id="stage" data-phase="one"><svg width="1920" height="1080"><g id="n-1-59"><g><path d="M0 0h50v50z"/></g></g><g id="bank-card-0" role="button"><g id="bank-card-0-n-1-365"><path d="M0 0h50v50z"/></g><g id="bank-card-0-n-1-366"><path/></g></g></svg></main>');
+  t.after(() => e.dom.window.close());
+  e.select(e.d.querySelector('svg'));
+  e.clickThroughSelection(e.d.querySelector('#n-1-59 path'));
+  assert.equal(e.messages.filter(item => item.type === 'selected').at(-1).selector, 'g#n-1-59');
+  e.clickThroughSelection(e.d.querySelector('#bank-card-0 path'));
+  assert.equal(e.messages.filter(item => item.type === 'selected').at(-1).selector, 'g#bank-card-0');
+});
+
+test('small SVG icons with internal IDs retain their complete image selection', t => {
+  const e = environment('<main id="stage" data-phase="one"><svg id="icon" width="24" height="24"><g id="icon-a"><path d="M0 0h12v12z"/></g><g id="icon-b"><path/></g></svg></main>');
+  t.after(() => e.dom.window.close());
+  e.select(e.d.querySelector('#icon-a path'));
+  assert.equal(e.messages.filter(item => item.type === 'selected').at(-1).selector, 'svg#icon');
+});
+
 test('saved group reselects its members and moves them with one undoable gesture', async t => {
   const e = environment(); t.after(() => e.dom.window.close());
   e.select(e.bee()); e.selectMore(e.bee(1));

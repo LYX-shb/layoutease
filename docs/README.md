@@ -33,7 +33,8 @@
 当前定格方式：[按下立即定格](./31-immediate-freeze.md)（0.1.6）。
 选择修复：[SVG 内部素材选择修复](./32-svg-object-selection.md)（0.1.7）。
 几何同步：[SVG 组件跨画面几何同步](./33-svg-scene-geometry.md)（0.1.8）。
-当前版本：[购物篮组件与真实画面切换修复](./34-basket-component-and-native-scene.md)（0.1.9）。
+购物篮修复：[购物篮组件与真实画面切换修复](./34-basket-component-and-native-scene.md)（0.1.9）。
+当前版本：[SVG ID 组件编辑修复](./35-svg-id-component-editing.md)（0.1.10）。
 
 1. 先完成单个主题单元的稳定编辑闭环，再扩展多页面、基础交互和 AI。
 2. 第一版的主价值是快速微调 HTML/CSS 页面；AI 用于复杂 JavaScript 逻辑，不替代简单拖拽。

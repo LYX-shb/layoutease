@@ -421,7 +421,7 @@ function installLayoutRuntime(options) {
         const previous = tracked.get(element) || new Map();
         // SVG groups have no CSS layout box. Interpret inspector dimensions in
         // SVG user units and derive a reversible visual scale for this object.
-        if (element.matches('g[data-node]') && typeof element.getBBox === 'function' && (next.has('width') || next.has('height'))) {
+        if (element.matches('g') && typeof element.getBBox === 'function' && (next.has('width') || next.has('height'))) {
           const box = element.getBBox();
           if (box.width > 0 && box.height > 0) {
             const originalScale = previous.get('scale')?.original.value ?? getComputedStyle(element).scale;
